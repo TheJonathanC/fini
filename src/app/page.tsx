@@ -973,7 +973,10 @@ export default function Home() {
                           ))}
                         </Pie>
                         <Tooltip
-                          formatter={(value: any) => [formatMoney(Number(value)), "Total"]}
+                          formatter={(value: any, name: any, item: any) => [
+                            `${formatMoney(Number(value))} (${item?.payload?.percentage || 0}%)`,
+                            `${item?.payload?.emoji || "🏷️"} ${name || "Total"}`,
+                          ]}
                           contentStyle={{
                             backgroundColor: isDarkMode ? "#1E293B" : "#FFFFFF",
                             borderRadius: "16px",
@@ -988,22 +991,57 @@ export default function Home() {
                     </ResponsiveContainer>
                   </div>
 
-                  {/* Top 4 Category List */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
-                    {insights.topCategories.slice(0, 4).map((cat, idx) => (
-                      <div
-                        key={idx}
-                        className="p-3 rounded-xl border-2 border-slate-900 dark:border-slate-700 bg-slate-50 dark:bg-[#1E293B] shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] flex items-center gap-2.5"
-                      >
-                        <span className="text-xl shrink-0">{cat.emoji || "🏷️"}</span>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-black text-slate-900 dark:text-white truncate">{cat.category}</p>
-                          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">
-                            {formatMoney(cat.total)} ({cat.percentage}%)
-                          </p>
-                        </div>
-                      </div>
-                    ))}
+                  {/* Complete Category Color Index / Legend */}
+                  <div className="mt-5 pt-4 border-t-2 border-slate-900/10 dark:border-slate-800">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse" />
+                        <span>Category Color Index</span>
+                      </span>
+                      <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                        {insights.topCategories.length} categories
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
+                      {insights.topCategories.map((cat, idx) => {
+                        const sliceColor = cat.color || CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
+                        return (
+                          <div
+                            key={idx}
+                            className="p-2 sm:p-2.5 rounded-xl border-2 border-slate-900 dark:border-slate-700 bg-slate-50 dark:bg-[#1E293B] shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] flex items-center justify-between gap-2 hover:bg-slate-100 dark:hover:bg-[#27354E] transition-colors"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              {/* Color Swatch / Dot matching chart slice */}
+                              <span
+                                className="w-3.5 h-3.5 rounded-md border border-slate-900 dark:border-slate-400 shadow-[1px_1px_0px_0px_#0f172a] shrink-0"
+                                style={{ backgroundColor: sliceColor }}
+                                title={`${cat.category} color`}
+                              />
+                              <span className="text-base shrink-0">{cat.emoji || "🏷️"}</span>
+                              <span className="text-xs font-black text-slate-900 dark:text-white truncate">
+                                {cat.category}
+                              </span>
+                            </div>
+
+                            <div className="text-right shrink-0 flex items-center gap-1.5">
+                              <span className="text-xs font-black text-slate-900 dark:text-slate-100">
+                                {formatMoney(cat.total)}
+                              </span>
+                              <span
+                                className="text-[10px] font-black px-1.5 py-0.5 rounded-md border border-slate-900 dark:border-slate-700"
+                                style={{
+                                  backgroundColor: isDarkMode ? `${sliceColor}30` : `${sliceColor}20`,
+                                  color: isDarkMode ? "#F8FAFC" : "#0F172A",
+                                }}
+                              >
+                                {cat.percentage}%
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
 
