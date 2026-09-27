@@ -380,7 +380,7 @@ export default function Home() {
                   ⚡
                 </div>
                 <div>
-                  <h4 className="font-black text-sm text-slate-900">Gemini 2.5 Flash</h4>
+                  <h4 className="font-black text-sm text-slate-900">Gemini 3.8 Flash</h4>
                   <p className="text-xs font-bold text-slate-500">Reads native PDF statements</p>
                 </div>
               </div>

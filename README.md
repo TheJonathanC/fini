@@ -5,7 +5,7 @@
 ## Features
 
 - 📄 **Direct PDF Uploads**: Simply drop your bank statement PDF to get started.
-- 🧠 **AI-Powered Insights**: Uses Gemini 2.5 Flash to automatically read, understand, and categorize your transactions.
+- 🧠 **AI-Powered Insights**: Uses Gemini 3.8 Flash to automatically read, understand, and categorize your transactions.
 - 📊 **Beautiful Visualizations**:
   - Daily spending bar charts.
   - Expense category pie charts.
