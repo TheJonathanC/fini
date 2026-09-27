@@ -33,6 +33,7 @@ import {
 import { analyzeStatement } from "@/lib/gemini";
 import { FinancialInsights, Transaction } from "@/lib/types";
 import { SAMPLE_INSIGHTS } from "@/lib/mockData";
+import { parseDateToTimestamp, formatDisplayDate } from "@/lib/dateUtils";
 import {
   BarChart,
   Bar,
@@ -284,15 +285,9 @@ export default function Home() {
     })}`;
   };
 
-  // Helper to parse dates for reliable sorting
+  // Robust date parser for reliable sorting
   const parseTransactionDate = (tx: Transaction): number => {
-    if (tx.isoDate) {
-      const parsed = Date.parse(tx.isoDate);
-      if (!isNaN(parsed)) return parsed;
-    }
-    const parsed = Date.parse(tx.date);
-    if (!isNaN(parsed)) return parsed;
-    return 0;
+    return parseDateToTimestamp(tx.isoDate || tx.date);
   };
 
   // Filtered & Sorted Transactions
@@ -1375,7 +1370,7 @@ export default function Home() {
                           {/* Clean Date Pill */}
                           <div className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-900 dark:border-slate-700 text-center shrink-0 min-w-[76px]">
                             <span className="block text-xs font-black text-slate-800 dark:text-slate-200">
-                              {tx.date}
+                              {formatDisplayDate(tx.isoDate || tx.date)}
                             </span>
                           </div>
 
