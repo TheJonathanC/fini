@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Settings,
   Upload,
@@ -25,7 +25,10 @@ import {
   Sun,
   Moon,
   ArrowUpDown,
-  ChevronLeft
+  ChevronLeft,
+  ChevronDown,
+  Check,
+  Coins
 } from "lucide-react";
 import { analyzeStatement } from "@/lib/gemini";
 import { FinancialInsights, Transaction } from "@/lib/types";
@@ -54,11 +57,11 @@ const CATEGORY_COLORS = [
   "#3B82F6", // Blue
 ];
 
-const CURRENCY_OPTIONS = [
-  { symbol: "₹", code: "INR", label: "₹ Rupee (INR)" },
-  { symbol: "$", code: "USD", label: "$ Dollar (USD)" },
-  { symbol: "€", code: "EUR", label: "€ Euro (EUR)" },
-  { symbol: "£", code: "GBP", label: "£ Pound (GBP)" },
+const CURRENCY_LIST = [
+  { symbol: "₹", code: "INR", flag: "🇮🇳", name: "Rupee", label: "₹ Rupee (INR)" },
+  { symbol: "$", code: "USD", flag: "🇺🇸", name: "Dollar", label: "$ Dollar (USD)" },
+  { symbol: "€", code: "EUR", flag: "🇪🇺", name: "Euro", label: "€ Euro (EUR)" },
+  { symbol: "£", code: "GBP", flag: "🇬🇧", name: "Pound", label: "£ Pound (GBP)" },
 ];
 
 export default function Home() {
@@ -89,6 +92,26 @@ export default function Home() {
 
   // Drag and drop state
   const [isDragging, setIsDragging] = useState(false);
+
+  // Currency Dropdown Popover State
+  const [isCurrencyOpen, setIsCurrencyOpen] = useState<boolean>(false);
+  const currencyMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (currencyMenuRef.current && !currencyMenuRef.current.contains(e.target as Node)) {
+        setIsCurrencyOpen(false);
+      }
+    };
+    if (isCurrencyOpen) {
+      document.addEventListener("mousedown", handleOutsideClick);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+    };
+  }, [isCurrencyOpen]);
+
+  const currentCurrency = CURRENCY_LIST.find((c) => c.symbol === currencySymbol) || CURRENCY_LIST[0];
 
   // Initialize theme, api key, and previous data
   useEffect(() => {
@@ -359,19 +382,75 @@ export default function Home() {
               )}
             </button>
 
-            {/* Currency Quick Selector */}
-            <select
-              value={currencySymbol}
-              onChange={(e) => handleCurrencyChange(e.target.value)}
-              className="tactile-btn px-2 sm:px-3 py-2 bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 text-xs sm:text-sm cursor-pointer focus:outline-none"
-              title="Change Currency"
-            >
-              {CURRENCY_OPTIONS.map((opt) => (
-                <option key={opt.code} value={opt.symbol} className="dark:bg-[#1E293B]">
-                  {opt.symbol} {opt.code}
-                </option>
-              ))}
-            </select>
+            {/* Custom Tactile Currency Dropdown (Matches the Cartoony Vibe) */}
+            <div className="relative" ref={currencyMenuRef}>
+              <button
+                type="button"
+                onClick={() => setIsCurrencyOpen(!isCurrencyOpen)}
+                className="tactile-btn px-2.5 sm:px-3 py-1.5 sm:py-2 bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 text-xs sm:text-sm gap-1.5 hover:bg-slate-50 dark:hover:bg-[#27354E]"
+                aria-expanded={isCurrencyOpen}
+                title="Change Currency"
+              >
+                <span className="w-5 h-5 rounded-lg bg-[#FEF08A] dark:bg-amber-400 text-slate-950 font-black text-xs flex items-center justify-center border border-slate-900 dark:border-amber-300 shadow-[1px_1px_0px_0px_#0f172a]">
+                  {currentCurrency.symbol}
+                </span>
+                <span className="font-extrabold hidden xs:inline">{currentCurrency.code}</span>
+                <ChevronDown
+                  size={14}
+                  className={`text-slate-500 transition-transform duration-200 ${
+                    isCurrencyOpen ? "rotate-180" : ""
+                  }`}
+                />
+              </button>
+
+              {/* Popover Dropdown */}
+              {isCurrencyOpen && (
+                <div className="absolute right-0 mt-2 w-52 p-2 rounded-2xl bg-white dark:bg-[#131B2E] border-2 border-slate-900 dark:border-[#38455E] shadow-[4px_4px_0px_0px_#0f172a] dark:shadow-[4px_4px_0px_0px_#020617] z-50 animate-in fade-in zoom-in-95 duration-150">
+                  <div className="px-2 py-1.5 mb-1 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">
+                      Currency
+                    </span>
+                    <Coins size={13} className="text-amber-500" />
+                  </div>
+
+                  <div className="space-y-1">
+                    {CURRENCY_LIST.map((c) => {
+                      const isSelected = currencySymbol === c.symbol;
+                      return (
+                        <button
+                          key={c.code}
+                          type="button"
+                          onClick={() => {
+                            handleCurrencyChange(c.symbol);
+                            setIsCurrencyOpen(false);
+                          }}
+                          className={`w-full p-2 rounded-xl text-left font-bold text-xs sm:text-sm flex items-center justify-between transition-all ${
+                            isSelected
+                              ? "bg-[#FEF08A] dark:bg-amber-400 text-slate-950 border-1.5 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a]"
+                              : "hover:bg-slate-100 dark:hover:bg-[#1E293B] text-slate-800 dark:text-slate-200"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-base select-none">{c.flag}</span>
+                            <span className="w-5 h-5 rounded-md bg-white/90 dark:bg-black/20 flex items-center justify-center font-black text-xs border border-slate-900/30">
+                              {c.symbol}
+                            </span>
+                            <span className="font-extrabold">{c.name}</span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-black opacity-60 uppercase">
+                              {c.code}
+                            </span>
+                            {isSelected && <Check size={14} className="stroke-[3]" />}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
 
             {insights && (
               <button
@@ -1226,33 +1305,39 @@ export default function Home() {
                   </div>
 
                   {/* Category Filter */}
-                  <select
-                    value={selectedCategoryFilter}
-                    onChange={(e) => {
-                      setSelectedCategoryFilter(e.target.value);
-                      setCurrentPage(1);
-                    }}
-                    className="px-3 py-2.5 rounded-2xl border-2 border-slate-900 dark:border-slate-700 font-bold text-xs sm:text-sm bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-300 cursor-pointer"
-                  >
-                    <option value="all">All Categories</option>
-                    {availableCategories.map((c, i) => (
-                      <option key={i} value={c}>{c}</option>
-                    ))}
-                  </select>
+                  <div className="relative">
+                    <select
+                      value={selectedCategoryFilter}
+                      onChange={(e) => {
+                        setSelectedCategoryFilter(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      className="w-full appearance-none pl-3.5 pr-9 py-2.5 rounded-2xl border-2 border-slate-900 dark:border-slate-700 font-bold text-xs sm:text-sm bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-300 cursor-pointer shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617]"
+                    >
+                      <option value="all">All Categories</option>
+                      {availableCategories.map((c, i) => (
+                        <option key={i} value={c}>{c}</option>
+                      ))}
+                    </select>
+                    <ChevronDown size={14} className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500" />
+                  </div>
 
                   {/* Type Filter */}
-                  <select
-                    value={selectedTypeFilter}
-                    onChange={(e) => {
-                      setSelectedTypeFilter(e.target.value as any);
-                      setCurrentPage(1);
-                    }}
-                    className="px-3 py-2.5 rounded-2xl border-2 border-slate-900 dark:border-slate-700 font-bold text-xs sm:text-sm bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-300 cursor-pointer"
-                  >
-                    <option value="all">All Flows (In & Out)</option>
-                    <option value="expense">Expenses Only (-)</option>
-                    <option value="income">Income Only (+)</option>
-                  </select>
+                  <div className="relative">
+                    <select
+                      value={selectedTypeFilter}
+                      onChange={(e) => {
+                        setSelectedTypeFilter(e.target.value as any);
+                        setCurrentPage(1);
+                      }}
+                      className="w-full appearance-none pl-3.5 pr-9 py-2.5 rounded-2xl border-2 border-slate-900 dark:border-slate-700 font-bold text-xs sm:text-sm bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-300 cursor-pointer shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617]"
+                    >
+                      <option value="all">All Flows (In & Out)</option>
+                      <option value="expense">Expenses Only (-)</option>
+                      <option value="income">Income Only (+)</option>
+                    </select>
+                    <ChevronDown size={14} className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500" />
+                  </div>
 
                   {/* Sort Selector: Newest First by default */}
                   <div className="relative">
@@ -1262,13 +1347,14 @@ export default function Home() {
                         setTransactionSort(e.target.value as any);
                         setCurrentPage(1);
                       }}
-                      className="w-full px-3 py-2.5 rounded-2xl border-2 border-slate-900 dark:border-slate-700 font-bold text-xs sm:text-sm bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-300 cursor-pointer"
+                      className="w-full appearance-none pl-3.5 pr-9 py-2.5 rounded-2xl border-2 border-slate-900 dark:border-slate-700 font-bold text-xs sm:text-sm bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-300 cursor-pointer shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617]"
                     >
                       <option value="newest">🕒 Newest First (Latest)</option>
                       <option value="oldest">📅 Oldest First</option>
                       <option value="highest">💰 Highest Amount</option>
                       <option value="lowest">🪙 Lowest Amount</option>
                     </select>
+                    <ChevronDown size={14} className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500" />
                   </div>
                 </div>
 
@@ -1394,18 +1480,24 @@ export default function Home() {
                 Currency Display
               </label>
               <div className="grid grid-cols-2 gap-2">
-                {CURRENCY_OPTIONS.map((opt) => (
+                {CURRENCY_LIST.map((opt) => (
                   <button
                     key={opt.code}
                     type="button"
                     onClick={() => handleCurrencyChange(opt.symbol)}
-                    className={`p-2.5 rounded-xl border-2 font-black text-xs text-left transition-all ${
+                    className={`p-2.5 rounded-xl border-2 font-black text-xs text-left transition-all flex items-center justify-between ${
                       currencySymbol === opt.symbol
-                        ? "border-slate-900 dark:border-amber-400 bg-[#FEF08A] dark:bg-amber-400 text-slate-900 shadow-[2px_2px_0px_0px_#0f172a]"
-                        : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#1E293B] text-slate-700 dark:text-slate-300"
+                        ? "border-slate-900 dark:border-amber-400 bg-[#FEF08A] dark:bg-amber-400 text-slate-950 shadow-[2px_2px_0px_0px_#0f172a]"
+                        : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#1E293B] text-slate-700 dark:text-slate-300 hover:border-slate-400"
                     }`}
                   >
-                    {opt.label}
+                    <div className="flex items-center gap-2">
+                      <span className="text-base select-none">{opt.flag}</span>
+                      <span>{opt.name}</span>
+                    </div>
+                    <span className="w-5 h-5 rounded-md bg-white/80 dark:bg-black/20 flex items-center justify-center font-black text-xs border border-slate-900/20">
+                      {opt.symbol}
+                    </span>
                   </button>
                 ))}
               </div>
