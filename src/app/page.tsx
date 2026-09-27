@@ -4,7 +4,6 @@ import React, { useState, useEffect, useMemo } from "react";
 import {
   Settings,
   Upload,
-  PiggyBank,
   RefreshCw,
   Sparkles,
   TrendingDown,
@@ -18,15 +17,15 @@ import {
   ExternalLink,
   CheckCircle2,
   AlertCircle,
-  HelpCircle,
-  ArrowUpRight,
   ChevronRight,
-  Filter,
   Layers,
   BarChart3,
   PieChart as PieIcon,
-  Smile,
-  X
+  X,
+  Sun,
+  Moon,
+  ArrowUpDown,
+  ChevronLeft
 } from "lucide-react";
 import { analyzeStatement } from "@/lib/gemini";
 import { FinancialInsights, Transaction } from "@/lib/types";
@@ -55,10 +54,24 @@ const CATEGORY_COLORS = [
   "#3B82F6", // Blue
 ];
 
+const CURRENCY_OPTIONS = [
+  { symbol: "₹", code: "INR", label: "₹ Rupee (INR)" },
+  { symbol: "$", code: "USD", label: "$ Dollar (USD)" },
+  { symbol: "€", code: "EUR", label: "€ Euro (EUR)" },
+  { symbol: "£", code: "GBP", label: "£ Pound (GBP)" },
+];
+
 export default function Home() {
+  // Theme state
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
+
+  // Settings & API Key
   const [apiKey, setApiKey] = useState<string>("");
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [tempKey, setTempKey] = useState<string>("");
+  const [currencySymbol, setCurrencySymbol] = useState<string>("₹");
+
+  // App State
   const [isDemoActive, setIsDemoActive] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [analysisStep, setAnalysisStep] = useState<string>("Reading PDF statement...");
@@ -66,30 +79,74 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "categories" | "daily" | "subscriptions" | "transactions">("overview");
 
-  // Transaction Search & Filter state
+  // Transaction Search, Filter & Sort state
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>("all");
+  const [selectedTypeFilter, setSelectedTypeFilter] = useState<"all" | "expense" | "income">("all");
+  const [transactionSort, setTransactionSort] = useState<"newest" | "oldest" | "highest" | "lowest">("newest");
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const itemsPerPage = 12;
 
   // Drag and drop state
   const [isDragging, setIsDragging] = useState(false);
 
+  // Initialize theme, api key, and previous data
   useEffect(() => {
-    // Check local storage for API Key and previous insights
+    // Theme initialization
+    const storedTheme = localStorage.getItem("fini_theme");
+    const systemPrefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    if (storedTheme === "dark" || (!storedTheme && systemPrefersDark)) {
+      setIsDarkMode(true);
+      document.documentElement.classList.add("dark");
+    } else {
+      setIsDarkMode(false);
+      document.documentElement.classList.remove("dark");
+    }
+
+    // Stored currency preference
+    const storedCurrency = localStorage.getItem("fini_currency");
+    if (storedCurrency) {
+      setCurrencySymbol(storedCurrency);
+    }
+
+    // API Key
     const storedKey = localStorage.getItem("fini_gemini_api_key");
     if (storedKey) {
       setApiKey(storedKey);
       setTempKey(storedKey);
     }
 
+    // Previous insights
     const storedInsights = localStorage.getItem("fini_insights");
     if (storedInsights) {
       try {
-        setInsights(JSON.parse(storedInsights));
+        const parsed = JSON.parse(storedInsights);
+        setInsights(parsed);
+        if (parsed.currencySymbol) {
+          setCurrencySymbol(parsed.currencySymbol);
+        }
       } catch (e) {
         console.error("Failed to parse stored insights", e);
       }
     }
   }, []);
+
+  const toggleDarkMode = () => {
+    const nextDark = !isDarkMode;
+    setIsDarkMode(nextDark);
+    if (nextDark) {
+      document.documentElement.classList.add("dark");
+      localStorage.setItem("fini_theme", "dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+      localStorage.setItem("fini_theme", "light");
+    }
+  };
+
+  const handleCurrencyChange = (newSymbol: string) => {
+    setCurrencySymbol(newSymbol);
+    localStorage.setItem("fini_currency", newSymbol);
+  };
 
   const handleSaveApiKey = () => {
     const trimmed = tempKey.trim();
@@ -107,7 +164,9 @@ export default function Home() {
   const loadDemoData = () => {
     setIsDemoActive(true);
     setInsights(SAMPLE_INSIGHTS);
+    setCurrencySymbol(SAMPLE_INSIGHTS.currencySymbol || "₹");
     setError(null);
+    setCurrentPage(1);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -128,7 +187,7 @@ export default function Home() {
     setAnalysisStep("Reading bank statement document...");
 
     const stepTimer1 = setTimeout(() => {
-      setAnalysisStep("Scanning & categorizing transactions with Gemini...");
+      setAnalysisStep("Scanning transactions & detecting currency...");
     }, 2000);
 
     const stepTimer2 = setTimeout(() => {
@@ -150,7 +209,12 @@ export default function Home() {
       const result = await analyzeStatement(base64Data, file.type, apiKey);
       setIsDemoActive(false);
       setInsights(result);
+      if (result.currencySymbol) {
+        setCurrencySymbol(result.currencySymbol);
+        localStorage.setItem("fini_currency", result.currencySymbol);
+      }
       localStorage.setItem("fini_insights", JSON.stringify(result));
+      setCurrentPage(1);
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Failed to analyze the statement. Please verify your API key and file.");
@@ -182,20 +246,72 @@ export default function Home() {
     setInsights(null);
     setIsDemoActive(false);
     setError(null);
+    setCurrentPage(1);
   };
 
-  // Filter transactions
-  const filteredTransactions = useMemo(() => {
+  // Safe Currency Formatter
+  const formatMoney = (amount: number, customSymbol?: string) => {
+    const sym = customSymbol || currencySymbol || "₹";
+    const num = Math.abs(Number(amount) || 0);
+    // Use Indian numbering format for Rupee, or standard US for others
+    const locale = sym === "₹" ? "en-IN" : "en-US";
+    return `${sym}${num.toLocaleString(locale, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  };
+
+  // Helper to parse dates for reliable sorting
+  const parseTransactionDate = (tx: Transaction): number => {
+    if (tx.isoDate) {
+      const parsed = Date.parse(tx.isoDate);
+      if (!isNaN(parsed)) return parsed;
+    }
+    const parsed = Date.parse(tx.date);
+    if (!isNaN(parsed)) return parsed;
+    return 0;
+  };
+
+  // Filtered & Sorted Transactions
+  const filteredAndSortedTransactions = useMemo(() => {
     const txs = insights?.allTransactions || insights?.largestExpenses || [];
-    return txs.filter((tx) => {
+    
+    // 1. Filter
+    const filtered = txs.filter((tx) => {
       const matchesSearch =
         tx.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
         tx.category.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesCategory =
         selectedCategoryFilter === "all" || tx.category === selectedCategoryFilter;
-      return matchesSearch && matchesCategory;
+      const matchesType =
+        selectedTypeFilter === "all" || tx.type === selectedTypeFilter;
+      return matchesSearch && matchesCategory && matchesType;
     });
-  }, [insights, searchQuery, selectedCategoryFilter]);
+
+    // 2. Sort (Default: Newest First)
+    return filtered.sort((a, b) => {
+      if (transactionSort === "newest") {
+        return parseTransactionDate(b) - parseTransactionDate(a);
+      }
+      if (transactionSort === "oldest") {
+        return parseTransactionDate(a) - parseTransactionDate(b);
+      }
+      if (transactionSort === "highest") {
+        return b.amount - a.amount;
+      }
+      if (transactionSort === "lowest") {
+        return a.amount - b.amount;
+      }
+      return 0;
+    });
+  }, [insights, searchQuery, selectedCategoryFilter, selectedTypeFilter, transactionSort]);
+
+  // Paginated Transactions
+  const totalPages = Math.ceil(filteredAndSortedTransactions.length / itemsPerPage) || 1;
+  const paginatedTransactions = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredAndSortedTransactions.slice(start, start + itemsPerPage);
+  }, [filteredAndSortedTransactions, currentPage]);
 
   // Unique categories for filter pills
   const availableCategories = useMemo(() => {
@@ -204,34 +320,63 @@ export default function Home() {
   }, [insights]);
 
   return (
-    <div className="min-h-screen text-slate-900 pb-20 selection:bg-amber-200">
-      {/* Top Banner Navigation */}
-      <header className="sticky top-0 z-40 bg-[#FAF8F5]/90 backdrop-blur-md border-b-2 border-slate-900">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
-          {/* Logo & Brand */}
+    <div className="min-h-screen text-slate-900 dark:text-slate-100 pb-20 transition-colors">
+      {/* ============================================================ */}
+      {/* TOP HEADER NAVIGATION                                        */}
+      {/* ============================================================ */}
+      <header className="sticky top-0 z-40 bg-[#FAF8F5]/90 dark:bg-[#0B0F19]/90 backdrop-blur-md border-b-2 border-slate-900 dark:border-[#38455E]">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between gap-3">
+          {/* Brand Logo (no v2 tag) */}
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-[#FEF08A] border-2 border-slate-900 shadow-[3px_3px_0px_0px_#0f172a] flex items-center justify-center text-2xl select-none transform -rotate-3 hover:rotate-0 transition-transform cursor-pointer">
+            <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#FEF08A] dark:bg-amber-400 border-2 border-slate-900 dark:border-amber-300 shadow-[3px_3px_0px_0px_#0f172a] dark:shadow-[3px_3px_0px_0px_#020617] flex items-center justify-center text-2xl select-none transform -rotate-3 hover:rotate-0 transition-transform cursor-pointer">
               🐷
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-3xl font-black tracking-tight text-slate-900">fini.</span>
-                <span className="text-xs font-black uppercase px-2 py-0.5 bg-[#DCFCE7] border border-slate-900 rounded-full shadow-[1px_1px_0px_0px_#0f172a]">
-                  v2.0
+                <span className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900 dark:text-white">
+                  fini.
                 </span>
               </div>
-              <p className="text-xs font-bold text-slate-500 hidden sm:block">
+              <p className="text-xs font-bold text-slate-500 dark:text-slate-400 hidden sm:block">
                 Clear & playful financial statement intelligence
               </p>
             </div>
           </div>
 
-          {/* Header Action Badges */}
+          {/* Header Action Badges & Toggles */}
           <div className="flex items-center gap-2 sm:gap-3">
+            {/* Dark Mode Toggle */}
+            <button
+              onClick={toggleDarkMode}
+              className="tactile-btn p-2 sm:px-3 sm:py-2 bg-white dark:bg-[#1E293B] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#27354E]"
+              title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+              aria-label="Toggle Dark Mode"
+            >
+              {isDarkMode ? (
+                <Sun size={18} className="text-amber-400 animate-spin-slow" />
+              ) : (
+                <Moon size={18} className="text-indigo-600" />
+              )}
+            </button>
+
+            {/* Currency Quick Selector */}
+            <select
+              value={currencySymbol}
+              onChange={(e) => handleCurrencyChange(e.target.value)}
+              className="tactile-btn px-2 sm:px-3 py-2 bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 text-xs sm:text-sm cursor-pointer focus:outline-none"
+              title="Change Currency"
+            >
+              {CURRENCY_OPTIONS.map((opt) => (
+                <option key={opt.code} value={opt.symbol} className="dark:bg-[#1E293B]">
+                  {opt.symbol} {opt.code}
+                </option>
+              ))}
+            </select>
+
             {insights && (
               <button
                 onClick={clearAllData}
-                className="tactile-btn px-3 py-2 bg-white text-xs sm:text-sm text-slate-700 hover:bg-slate-50 gap-1.5"
+                className="tactile-btn px-3 py-2 bg-white dark:bg-[#1E293B] text-xs sm:text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#27354E] gap-1.5"
                 title="Upload another statement"
               >
                 <RefreshCw size={14} />
@@ -242,42 +387,42 @@ export default function Home() {
             {!insights && (
               <button
                 onClick={loadDemoData}
-                className="tactile-btn px-3.5 py-2 bg-[#FEF08A] text-xs sm:text-sm text-slate-900 hover:bg-[#FDE047] gap-1.5"
+                className="tactile-btn px-3 sm:px-3.5 py-2 bg-[#FEF08A] dark:bg-amber-400 text-xs sm:text-sm text-slate-900 hover:bg-[#FDE047] gap-1.5"
               >
-                <Sparkles size={15} className="text-amber-700 animate-pulse" />
+                <Sparkles size={15} className="text-amber-800 animate-pulse" />
                 <span>Try Demo</span>
               </button>
             )}
 
             <button
               onClick={() => setShowSettings(true)}
-              className={`tactile-btn px-3.5 py-2 text-xs sm:text-sm gap-2 ${
+              className={`tactile-btn px-3 sm:px-3.5 py-2 text-xs sm:text-sm gap-2 ${
                 apiKey
-                  ? "bg-[#DCFCE7] text-slate-900 hover:bg-[#BBF7D0]"
-                  : "bg-white text-slate-700 hover:bg-slate-50"
+                  ? "bg-[#DCFCE7] dark:bg-emerald-950 dark:text-emerald-300 text-slate-900 hover:bg-[#BBF7D0]"
+                  : "bg-white dark:bg-[#1E293B] text-slate-700 dark:text-slate-200 hover:bg-slate-50"
               }`}
             >
               <Settings size={16} />
-              <span className="hidden sm:inline">
-                {apiKey ? "API Connected ⚡" : "Add Gemini Key"}
+              <span className="hidden md:inline">
+                {apiKey ? "API Connected ⚡" : "Add Key"}
               </span>
             </button>
           </div>
         </div>
       </header>
 
-      {/* Main Container */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
+      {/* Main Content Area */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8">
         {/* Error Alert */}
         {error && (
-          <div className="mb-8 p-4 bg-[#FFE4E6] border-2 border-slate-900 rounded-2xl shadow-[3px_3px_0px_0px_#0f172a] flex items-center justify-between gap-3">
+          <div className="mb-6 p-4 bg-[#FFE4E6] dark:bg-rose-950/70 border-2 border-slate-900 dark:border-rose-800 rounded-2xl shadow-[3px_3px_0px_0px_#0f172a] dark:shadow-[3px_3px_0px_0px_#020617] flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <AlertCircle className="text-rose-600 shrink-0" size={24} />
-              <p className="font-bold text-rose-950 text-sm sm:text-base">{error}</p>
+              <AlertCircle className="text-rose-600 dark:text-rose-400 shrink-0" size={24} />
+              <p className="font-bold text-rose-950 dark:text-rose-200 text-sm sm:text-base">{error}</p>
             </div>
             <button
               onClick={() => setError(null)}
-              className="p-1 hover:bg-rose-200 rounded-lg text-rose-800 transition-colors"
+              className="p-1 hover:bg-rose-200 dark:hover:bg-rose-900 rounded-lg text-rose-800 dark:text-rose-300 transition-colors"
             >
               <X size={18} />
             </button>
@@ -290,30 +435,30 @@ export default function Home() {
         {!insights && !isAnalyzing && (
           <div className="py-6 sm:py-12 flex flex-col items-center">
             {/* Playful Floating Hero Tag */}
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#E0F2FE] border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] mb-6">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#E0F2FE] dark:bg-sky-950 dark:text-sky-300 border-2 border-slate-900 dark:border-sky-800 shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] mb-6">
               <span className="text-base">✨</span>
-              <span className="text-xs sm:text-sm font-black text-slate-800 tracking-wide uppercase">
+              <span className="text-xs sm:text-sm font-black tracking-wide uppercase">
                 100% Private & Client-Side Bank Statement Analysis
               </span>
             </div>
 
             {/* Hero Heading */}
-            <h1 className="text-4xl sm:text-6xl font-black text-center max-w-3xl leading-[1.1] mb-6 text-slate-900">
+            <h1 className="text-3xl sm:text-5xl lg:text-6xl font-black text-center max-w-3xl leading-[1.15] mb-6 text-slate-900 dark:text-white">
               Where did your money <br />
-              <span className="inline-block relative">
-                <span className="relative z-10 px-3 py-1 bg-[#FEF08A] rounded-2xl border-2 border-slate-900 shadow-[4px_4px_0px_0px_#0f172a] -rotate-1 transform inline-block">
+              <span className="inline-block relative mt-2 sm:mt-1">
+                <span className="relative z-10 px-3 py-1 bg-[#FEF08A] dark:bg-amber-400 text-slate-900 rounded-2xl border-2 border-slate-900 shadow-[4px_4px_0px_0px_#0f172a] dark:shadow-[4px_4px_0px_0px_#020617] -rotate-1 transform inline-block">
                   actually go?
                 </span>
               </span>
             </h1>
 
             {/* Subheading */}
-            <p className="text-base sm:text-xl font-bold text-slate-600 text-center max-w-2xl mb-10 leading-relaxed">
-              Drop any PDF bank statement. In seconds, Gemini AI categorizes every transaction, uncovers sneaky subscriptions, and reveals your real spending pulse.
+            <p className="text-sm sm:text-lg font-bold text-slate-600 dark:text-slate-400 text-center max-w-2xl mb-8 sm:mb-10 leading-relaxed px-2">
+              Drop any PDF bank statement. In seconds, Gemini AI categorizes every transaction, uncovers sneaky subscriptions, and reveals your real spending pulse in {currencySymbol}.
             </p>
 
-            {/* Main Interactive Dropzone */}
-            <div className="w-full max-w-2xl mb-10">
+            {/* Interactive Dropzone */}
+            <div className="w-full max-w-2xl mb-8 sm:mb-10 px-2 sm:px-0">
               <div
                 onDragOver={(e) => {
                   e.preventDefault();
@@ -321,28 +466,28 @@ export default function Home() {
                 }}
                 onDragLeave={() => setIsDragging(false)}
                 onDrop={handleDrop}
-                className={`relative rounded-3xl border-3 border-dashed transition-all p-8 sm:p-12 text-center flex flex-col items-center justify-center ${
+                className={`relative rounded-3xl border-3 border-dashed transition-all p-6 sm:p-12 text-center flex flex-col items-center justify-center ${
                   isDragging
-                    ? "border-emerald-600 bg-emerald-50 scale-[1.01]"
-                    : "border-slate-900/60 bg-white hover:border-slate-900 hover:bg-[#FAF5FF]/40 shadow-[4px_4px_0px_0px_#0f172a]"
+                    ? "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 scale-[1.01]"
+                    : "border-slate-900/60 dark:border-slate-700 bg-white dark:bg-[#131B2E] hover:border-slate-900 dark:hover:border-slate-500 shadow-[4px_4px_0px_0px_#0f172a] dark:shadow-[4px_4px_0px_0px_#020617]"
                 }`}
               >
                 {/* Visual Icon */}
-                <div className="w-20 h-20 rounded-3xl bg-[#E0F2FE] border-2 border-slate-900 shadow-[3px_3px_0px_0px_#0f172a] flex items-center justify-center text-4xl mb-5 transform hover:scale-110 transition-transform">
+                <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-3xl bg-[#E0F2FE] dark:bg-sky-950 border-2 border-slate-900 dark:border-sky-800 shadow-[3px_3px_0px_0px_#0f172a] dark:shadow-[3px_3px_0px_0px_#020617] flex items-center justify-center text-3xl sm:text-4xl mb-4 sm:mb-5 transform hover:scale-110 transition-transform">
                   📂
                 </div>
 
-                <h3 className="text-2xl font-black text-slate-900 mb-2">
+                <h3 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mb-2">
                   Drop your PDF Bank Statement here
                 </h3>
-                <p className="text-sm font-bold text-slate-500 mb-6 max-w-sm">
-                  Supports Chase, Bank of America, Wells Fargo, Revolut, Monzo, or any standard bank PDF
+                <p className="text-xs sm:text-sm font-bold text-slate-500 dark:text-slate-400 mb-6 max-w-sm">
+                  Supports HDFC, SBI, ICICI, Axis, Chase, BoA, Revolut, or any standard bank PDF
                 </p>
 
-                {/* Upload Button */}
-                <div className="flex flex-wrap items-center justify-center gap-4">
-                  <label className="tactile-btn px-6 py-3.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-base gap-2 cursor-pointer">
-                    <Upload size={20} />
+                {/* Upload Buttons */}
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-3 w-full sm:w-auto">
+                  <label className="tactile-btn w-full sm:w-auto px-6 py-3.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-sm sm:text-base gap-2 cursor-pointer">
+                    <Upload size={18} />
                     <span>Select PDF File</span>
                     <input
                       type="file"
@@ -354,44 +499,44 @@ export default function Home() {
 
                   <button
                     onClick={loadDemoData}
-                    className="tactile-btn px-6 py-3.5 bg-[#FEF08A] hover:bg-[#FDE047] text-slate-900 text-base gap-2"
+                    className="tactile-btn w-full sm:w-auto px-6 py-3.5 bg-[#FEF08A] dark:bg-amber-400 hover:bg-[#FDE047] text-slate-900 text-sm sm:text-base gap-2"
                   >
-                    <Sparkles size={18} className="text-amber-700" />
-                    <span>See Demo Statement</span>
+                    <Sparkles size={18} className="text-amber-800" />
+                    <span>Try Demo Statement ({currencySymbol})</span>
                   </button>
                 </div>
               </div>
             </div>
 
             {/* Feature Perks Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full max-w-3xl">
-              <div className="p-4 rounded-2xl bg-white border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-[#DCFCE7] border border-slate-900 flex items-center justify-center text-lg shrink-0">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 w-full max-w-3xl px-2 sm:px-0">
+              <div className="p-4 rounded-2xl bg-white dark:bg-[#131B2E] border-2 border-slate-900 dark:border-[#38455E] shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#DCFCE7] dark:bg-emerald-950 border border-slate-900 dark:border-emerald-800 flex items-center justify-center text-lg shrink-0">
                   🔒
                 </div>
                 <div>
-                  <h4 className="font-black text-sm text-slate-900">100% Private</h4>
-                  <p className="text-xs font-bold text-slate-500">Processed locally in browser</p>
+                  <h4 className="font-black text-sm text-slate-900 dark:text-white">100% Private</h4>
+                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Processed locally in browser</p>
                 </div>
               </div>
 
-              <div className="p-4 rounded-2xl bg-white border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-[#FEF08A] border border-slate-900 flex items-center justify-center text-lg shrink-0">
+              <div className="p-4 rounded-2xl bg-white dark:bg-[#131B2E] border-2 border-slate-900 dark:border-[#38455E] shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#FEF08A] dark:bg-amber-950 border border-slate-900 dark:border-amber-800 flex items-center justify-center text-lg shrink-0">
                   ⚡
                 </div>
                 <div>
-                  <h4 className="font-black text-sm text-slate-900">Gemini 3.8 Flash</h4>
-                  <p className="text-xs font-bold text-slate-500">Reads native PDF statements</p>
+                  <h4 className="font-black text-sm text-slate-900 dark:text-white">Gemini 3.8 Flash</h4>
+                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Auto-detects Rupee/Currency</p>
                 </div>
               </div>
 
-              <div className="p-4 rounded-2xl bg-white border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-[#F3E8FF] border border-slate-900 flex items-center justify-center text-lg shrink-0">
+              <div className="p-4 rounded-2xl bg-white dark:bg-[#131B2E] border-2 border-slate-900 dark:border-[#38455E] shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#F3E8FF] dark:bg-purple-950 border border-slate-900 dark:border-purple-800 flex items-center justify-center text-lg shrink-0">
                   🕵️
                 </div>
                 <div>
-                  <h4 className="font-black text-sm text-slate-900">Subscription Radar</h4>
-                  <p className="text-xs font-bold text-slate-500">Flags recurring drains</p>
+                  <h4 className="font-black text-sm text-slate-900 dark:text-white">Subscription Radar</h4>
+                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Flags recurring drains</p>
                 </div>
               </div>
             </div>
@@ -403,18 +548,18 @@ export default function Home() {
         {/* ============================================================ */}
         {isAnalyzing && (
           <div className="py-20 flex flex-col items-center justify-center text-center">
-            <div className="w-24 h-24 rounded-3xl bg-[#FEF08A] border-3 border-slate-900 shadow-[4px_4px_0px_0px_#0f172a] flex items-center justify-center text-5xl mb-8 animate-bounce">
+            <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-3xl bg-[#FEF08A] dark:bg-amber-400 border-3 border-slate-900 dark:border-amber-300 shadow-[4px_4px_0px_0px_#0f172a] dark:shadow-[4px_4px_0px_0px_#020617] flex items-center justify-center text-4xl sm:text-5xl mb-6 sm:mb-8 animate-bounce">
               🐷
             </div>
-            <h2 className="text-3xl font-black text-slate-900 mb-3">
+            <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mb-3">
               Fini is crunching your numbers...
             </h2>
-            <div className="inline-flex items-center gap-2 px-4 py-2 bg-white border-2 border-slate-900 rounded-full shadow-[2px_2px_0px_0px_#0f172a] mb-6">
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-[#131B2E] border-2 border-slate-900 dark:border-[#38455E] rounded-full shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] mb-6">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
-              <span className="text-sm font-black text-slate-800">{analysisStep}</span>
+              <span className="text-xs sm:text-sm font-black text-slate-800 dark:text-slate-200">{analysisStep}</span>
             </div>
-            <p className="text-sm font-bold text-slate-500 max-w-md">
-              Gemini is transcribing transactions, aggregating category totals, and detecting spending trends. This usually takes 5-10 seconds.
+            <p className="text-xs sm:text-sm font-bold text-slate-500 dark:text-slate-400 max-w-md px-4">
+              Gemini is transcribing transactions, detecting currency, aggregating categories, and sorting newest first.
             </p>
           </div>
         )}
@@ -423,25 +568,28 @@ export default function Home() {
         {/* VIEW 3: FULL FINANCIAL DASHBOARD                             */}
         {/* ============================================================ */}
         {insights && !isAnalyzing && (
-          <div className="space-y-8 animate-in fade-in duration-300">
+          <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-300">
             {/* Dashboard Sub-Header / Statement Info */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-3xl bg-white border-2 border-slate-900 shadow-[3px_3px_0px_0px_#0f172a]">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-white dark:bg-[#131B2E] border-2 border-slate-900 dark:border-[#38455E] shadow-[3px_3px_0px_0px_#0f172a] dark:shadow-[3px_3px_0px_0px_#020617]">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-[#E0F2FE] border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] flex items-center justify-center text-2xl">
+                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#E0F2FE] dark:bg-sky-950 border-2 border-slate-900 dark:border-sky-800 shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] flex items-center justify-center text-xl sm:text-2xl shrink-0">
                   📄
                 </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-xl font-black text-slate-900">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white truncate">
                       {insights.accountHolder || "Statement Overview"}
                     </h2>
                     {isDemoActive && (
-                      <span className="px-2.5 py-0.5 text-xs font-black bg-[#FEF08A] text-slate-900 border border-slate-900 rounded-full">
-                        Demo Statement
+                      <span className="px-2 py-0.5 text-xs font-black bg-[#FEF08A] dark:bg-amber-400 text-slate-900 border border-slate-900 rounded-full">
+                        Demo
                       </span>
                     )}
+                    <span className="px-2 py-0.5 text-xs font-black bg-[#DCFCE7] dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-slate-900 dark:border-emerald-800 rounded-full">
+                      {currencySymbol} {insights.currencyCode || "INR"}
+                    </span>
                   </div>
-                  <p className="text-xs font-bold text-slate-500 flex items-center gap-1.5 mt-0.5">
+                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1.5 mt-0.5 truncate">
                     <Calendar size={13} />
                     <span>{insights.statementPeriod || "Latest Analysis Period"}</span>
                   </p>
@@ -449,10 +597,10 @@ export default function Home() {
               </div>
 
               {/* Quick Actions */}
-              <div className="flex items-center gap-2">
-                <label className="tactile-btn px-4 py-2 bg-[#E0F2FE] hover:bg-[#BAE6FD] text-slate-900 text-xs sm:text-sm gap-1.5 cursor-pointer">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="tactile-btn px-3 sm:px-4 py-2 bg-[#E0F2FE] dark:bg-sky-950 hover:bg-[#BAE6FD] dark:hover:bg-sky-900 text-slate-900 dark:text-sky-200 text-xs sm:text-sm gap-1.5 cursor-pointer">
                   <Upload size={14} />
-                  <span>Upload Another PDF</span>
+                  <span>Upload PDF</span>
                   <input
                     type="file"
                     accept="application/pdf"
@@ -462,7 +610,7 @@ export default function Home() {
                 </label>
                 <button
                   onClick={clearAllData}
-                  className="tactile-btn px-3 py-2 bg-[#FFE4E6] hover:bg-[#FECDD3] text-rose-900 text-xs sm:text-sm gap-1"
+                  className="tactile-btn px-3 py-2 bg-[#FFE4E6] dark:bg-rose-950 hover:bg-[#FECDD3] dark:hover:bg-rose-900 text-rose-900 dark:text-rose-200 text-xs sm:text-sm gap-1"
                   title="Clear insights"
                 >
                   <RefreshCw size={14} />
@@ -472,95 +620,95 @@ export default function Home() {
             </div>
 
             {/* Vital Stat Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
               {/* Card 1: Total Spent */}
-              <div className="tactile-card p-6 bg-[#FFE4E6]/50 flex flex-col justify-between">
+              <div className="tactile-card p-5 sm:p-6 bg-[#FFE4E6]/50 dark:bg-rose-950/30 flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-black uppercase tracking-wider text-rose-900">
+                    <span className="text-xs font-black uppercase tracking-wider text-rose-900 dark:text-rose-300">
                       Total Outflows
                     </span>
-                    <span className="p-2 rounded-xl bg-white border border-slate-900 text-rose-600 shadow-[1px_1px_0px_0px_#0f172a]">
+                    <span className="p-2 rounded-xl bg-white dark:bg-[#1E293B] border border-slate-900 dark:border-slate-700 text-rose-600 dark:text-rose-400 shadow-[1px_1px_0px_0px_#0f172a] dark:shadow-[1px_1px_0px_0px_#020617]">
                       <TrendingDown size={18} />
                     </span>
                   </div>
-                  <div className="text-3xl sm:text-4xl font-black text-slate-900">
-                    ${insights.totalSpent.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  <div className="text-2xl sm:text-3xl lg:text-4xl font-black text-slate-900 dark:text-white break-words">
+                    {formatMoney(insights.totalSpent)}
                   </div>
                 </div>
-                <div className="mt-4 pt-3 border-t border-slate-900/10 flex items-center justify-between text-xs font-bold text-slate-600">
+                <div className="mt-4 pt-3 border-t border-slate-900/10 dark:border-slate-700/60 flex items-center justify-between text-xs font-bold text-slate-600 dark:text-slate-400">
                   <span>Daily Avg:</span>
-                  <span className="font-black text-slate-900">
-                    ${(insights.averageDailySpend || insights.totalSpent / 30).toFixed(2)} / day
+                  <span className="font-black text-slate-900 dark:text-slate-100">
+                    {formatMoney(insights.averageDailySpend || insights.totalSpent / 30)} / day
                   </span>
                 </div>
               </div>
 
               {/* Card 2: Total Income */}
-              <div className="tactile-card p-6 bg-[#DCFCE7]/60 flex flex-col justify-between">
+              <div className="tactile-card p-5 sm:p-6 bg-[#DCFCE7]/60 dark:bg-emerald-950/30 flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-black uppercase tracking-wider text-emerald-900">
+                    <span className="text-xs font-black uppercase tracking-wider text-emerald-900 dark:text-emerald-300">
                       Total Inflows
                     </span>
-                    <span className="p-2 rounded-xl bg-white border border-slate-900 text-emerald-600 shadow-[1px_1px_0px_0px_#0f172a]">
+                    <span className="p-2 rounded-xl bg-white dark:bg-[#1E293B] border border-slate-900 dark:border-slate-700 text-emerald-600 dark:text-emerald-400 shadow-[1px_1px_0px_0px_#0f172a] dark:shadow-[1px_1px_0px_0px_#020617]">
                       <TrendingUp size={18} />
                     </span>
                   </div>
-                  <div className="text-3xl sm:text-4xl font-black text-slate-900">
-                    ${insights.totalIncome.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  <div className="text-2xl sm:text-3xl lg:text-4xl font-black text-slate-900 dark:text-white break-words">
+                    {formatMoney(insights.totalIncome)}
                   </div>
                 </div>
-                <div className="mt-4 pt-3 border-t border-slate-900/10 flex items-center justify-between text-xs font-bold text-slate-600">
-                  <span>Deposits:</span>
-                  <span className="font-black text-emerald-800">Income & Transfers</span>
+                <div className="mt-4 pt-3 border-t border-slate-900/10 dark:border-slate-700/60 flex items-center justify-between text-xs font-bold text-slate-600 dark:text-slate-400">
+                  <span>Inflows:</span>
+                  <span className="font-black text-emerald-700 dark:text-emerald-400">Salary & Deposits</span>
                 </div>
               </div>
 
               {/* Card 3: Net Savings */}
-              <div className="tactile-card p-6 bg-[#E0F2FE]/60 flex flex-col justify-between">
+              <div className="tactile-card p-5 sm:p-6 bg-[#E0F2FE]/60 dark:bg-sky-950/30 flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-black uppercase tracking-wider text-sky-900">
+                    <span className="text-xs font-black uppercase tracking-wider text-sky-900 dark:text-sky-300">
                       Net Saved
                     </span>
-                    <span className="p-2 rounded-xl bg-white border border-slate-900 text-sky-600 shadow-[1px_1px_0px_0px_#0f172a]">
+                    <span className="p-2 rounded-xl bg-white dark:bg-[#1E293B] border border-slate-900 dark:border-slate-700 text-sky-600 dark:text-sky-400 shadow-[1px_1px_0px_0px_#0f172a] dark:shadow-[1px_1px_0px_0px_#020617]">
                       <Wallet size={18} />
                     </span>
                   </div>
-                  <div className={`text-3xl sm:text-4xl font-black ${insights.netSavings >= 0 ? "text-emerald-700" : "text-rose-600"}`}>
-                    {insights.netSavings >= 0 ? "+" : ""}${insights.netSavings.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  <div className={`text-2xl sm:text-3xl lg:text-4xl font-black break-words ${insights.netSavings >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+                    {insights.netSavings >= 0 ? "+" : "-"}{formatMoney(Math.abs(insights.netSavings))}
                   </div>
                 </div>
-                <div className="mt-4 pt-3 border-t border-slate-900/10 flex items-center justify-between text-xs font-bold">
-                  <span className="text-slate-600">Savings Rate:</span>
-                  <span className="px-2 py-0.5 bg-white border border-slate-900 rounded-full font-black text-slate-900 shadow-[1px_1px_0px_0px_#0f172a]">
+                <div className="mt-4 pt-3 border-t border-slate-900/10 dark:border-slate-700/60 flex items-center justify-between text-xs font-bold">
+                  <span className="text-slate-600 dark:text-slate-400">Savings Rate:</span>
+                  <span className="px-2 py-0.5 bg-white dark:bg-[#1E293B] border border-slate-900 dark:border-slate-700 rounded-full font-black text-slate-900 dark:text-slate-100 shadow-[1px_1px_0px_0px_#0f172a] dark:shadow-[1px_1px_0px_0px_#020617]">
                     {insights.savingsRate}%
                   </span>
                 </div>
               </div>
 
               {/* Card 4: Financial Health Score */}
-              <div className="tactile-card p-6 bg-[#FEF08A]/50 flex flex-col justify-between">
+              <div className="tactile-card p-5 sm:p-6 bg-[#FEF08A]/50 dark:bg-amber-950/30 flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-black uppercase tracking-wider text-amber-900">
+                    <span className="text-xs font-black uppercase tracking-wider text-amber-900 dark:text-amber-300">
                       Fini Score
                     </span>
-                    <span className="p-2 rounded-xl bg-white border border-slate-900 text-amber-600 shadow-[1px_1px_0px_0px_#0f172a]">
+                    <span className="p-2 rounded-xl bg-white dark:bg-[#1E293B] border border-slate-900 dark:border-slate-700 text-amber-600 dark:text-amber-400 shadow-[1px_1px_0px_0px_#0f172a] dark:shadow-[1px_1px_0px_0px_#020617]">
                       <ShieldCheck size={18} />
                     </span>
                   </div>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-3xl sm:text-4xl font-black text-slate-900">
+                    <span className="text-2xl sm:text-3xl lg:text-4xl font-black text-slate-900 dark:text-white">
                       {insights.healthScore || 80}
                     </span>
-                    <span className="text-sm font-black text-slate-500">/ 100</span>
+                    <span className="text-sm font-black text-slate-500 dark:text-slate-400">/ 100</span>
                   </div>
                 </div>
-                <div className="mt-4 pt-3 border-t border-slate-900/10 flex items-center justify-between text-xs font-bold">
-                  <span className="text-slate-600">Rating:</span>
-                  <span className="font-black text-amber-950">
+                <div className="mt-4 pt-3 border-t border-slate-900/10 dark:border-slate-700/60 flex items-center justify-between text-xs font-bold">
+                  <span className="text-slate-600 dark:text-slate-400">Health:</span>
+                  <span className="font-black text-amber-950 dark:text-amber-300">
                     {insights.healthScore >= 80 ? "Healthy 🌟" : insights.healthScore >= 60 ? "Moderate ⚖️" : "Needs Care ⚠️"}
                   </span>
                 </div>
@@ -568,28 +716,28 @@ export default function Home() {
             </div>
 
             {/* Persona & Fun Insights Banner */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 sm:gap-6">
               {/* Persona Archetype & AI Summary */}
-              <div className="lg:col-span-2 tactile-card p-6 sm:p-8 bg-[#FEF9C3]/40 flex flex-col justify-between">
+              <div className="lg:col-span-2 tactile-card p-5 sm:p-8 bg-[#FEF9C3]/40 dark:bg-amber-950/20 flex flex-col justify-between">
                 <div>
-                  <div className="flex flex-wrap items-center gap-3 mb-4">
-                    <span className="px-3 py-1 bg-[#FEF08A] border-2 border-slate-900 rounded-full font-black text-xs uppercase tracking-wider shadow-[2px_2px_0px_0px_#0f172a]">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4">
+                    <span className="px-3 py-1 bg-[#FEF08A] dark:bg-amber-400 text-slate-900 border-2 border-slate-900 rounded-full font-black text-xs uppercase tracking-wider shadow-[2px_2px_0px_0px_#0f172a]">
                       Your Money Archetype
                     </span>
-                    <h3 className="text-xl sm:text-2xl font-black text-slate-900">
+                    <h3 className="text-lg sm:text-2xl font-black text-slate-900 dark:text-white">
                       {insights.financialPersona || "The Mindful Spender"}
                     </h3>
                   </div>
 
-                  <p className="text-base font-bold text-slate-700 mb-5 leading-relaxed">
+                  <p className="text-sm sm:text-base font-bold text-slate-700 dark:text-slate-300 mb-5 leading-relaxed">
                     {insights.personaDescription}
                   </p>
 
-                  <div className="p-4 rounded-2xl bg-white border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a]">
-                    <h4 className="text-xs font-black uppercase text-slate-500 tracking-wider mb-1">
+                  <div className="p-4 rounded-2xl bg-white dark:bg-[#1E293B] border-2 border-slate-900 dark:border-[#38455E] shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617]">
+                    <h4 className="text-xs font-black uppercase text-slate-500 dark:text-slate-400 tracking-wider mb-1">
                       AI Executive Summary
                     </h4>
-                    <p className="text-sm font-bold text-slate-800 leading-normal">
+                    <p className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 leading-normal">
                       {insights.summary}
                     </p>
                   </div>
@@ -597,15 +745,15 @@ export default function Home() {
 
                 {/* Actionable Tips */}
                 {insights.actionableTips && insights.actionableTips.length > 0 && (
-                  <div className="mt-6 pt-5 border-t-2 border-slate-900/10">
-                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-600 mb-3 flex items-center gap-1.5">
-                      <Zap size={14} className="text-amber-600" />
+                  <div className="mt-6 pt-5 border-t-2 border-slate-900/10 dark:border-slate-700/60">
+                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-3 flex items-center gap-1.5">
+                      <Zap size={14} className="text-amber-500" />
                       <span>Smart Money Moves</span>
                     </h4>
                     <div className="space-y-2">
                       {insights.actionableTips.map((tip, idx) => (
-                        <div key={idx} className="flex items-start gap-2.5 text-xs sm:text-sm font-bold text-slate-700">
-                          <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+                        <div key={idx} className="flex items-start gap-2.5 text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-300">
+                          <CheckCircle2 size={16} className="text-emerald-500 shrink-0 mt-0.5" />
                           <span>{tip}</span>
                         </div>
                       ))}
@@ -615,42 +763,42 @@ export default function Home() {
               </div>
 
               {/* Funny Observation Callout */}
-              <div className="tactile-card p-6 sm:p-8 bg-[#F3E8FF]/60 flex flex-col justify-between">
+              <div className="tactile-card p-5 sm:p-8 bg-[#F3E8FF]/60 dark:bg-purple-950/20 flex flex-col justify-between">
                 <div>
-                  <div className="w-12 h-12 rounded-2xl bg-[#E9D5FF] border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] flex items-center justify-center text-2xl mb-4">
+                  <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#E9D5FF] dark:bg-purple-900 border-2 border-slate-900 dark:border-purple-700 shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] flex items-center justify-center text-xl sm:text-2xl mb-4">
                     💡
                   </div>
-                  <h3 className="text-xl font-black text-slate-900 mb-3">
+                  <h3 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white mb-3">
                     The Quirky Detail
                   </h3>
-                  <div className="p-4 rounded-2xl bg-white border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] text-slate-800 text-sm font-bold leading-relaxed">
+                  <div className="p-4 rounded-2xl bg-white dark:bg-[#1E293B] border-2 border-slate-900 dark:border-[#38455E] shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] text-slate-800 dark:text-slate-200 text-xs sm:text-sm font-bold leading-relaxed">
                     "{insights.funnyObservation}"
                   </div>
                 </div>
 
-                <div className="mt-6 p-4 rounded-2xl bg-[#E0F2FE] border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a]">
+                <div className="mt-5 p-4 rounded-2xl bg-[#E0F2FE] dark:bg-sky-950/50 border-2 border-slate-900 dark:border-sky-800 shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617]">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-lg">🕵️</span>
-                    <span className="text-xs font-black text-sky-950 uppercase tracking-wider">
+                    <span className="text-base sm:text-lg">🕵️</span>
+                    <span className="text-xs font-black text-sky-950 dark:text-sky-300 uppercase tracking-wider">
                       Recurring Radar
                     </span>
                   </div>
-                  <p className="text-xs font-bold text-sky-900">
-                    Detected {insights.subscriptions?.length || 0} subscriptions totaling $
-                    {(insights.subscriptions?.reduce((sum, s) => sum + s.amount, 0) || 0).toFixed(2)}/mo
+                  <p className="text-xs font-bold text-sky-900 dark:text-sky-200">
+                    Detected {insights.subscriptions?.length || 0} subscriptions totaling{" "}
+                    {formatMoney(insights.subscriptions?.reduce((sum, s) => sum + s.amount, 0) || 0)}/mo
                   </p>
                 </div>
               </div>
             </div>
 
-            {/* Interactive Tab Navigation */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
+            {/* Interactive Tab Navigation (Fully Responsive) */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none snap-x">
               <button
                 onClick={() => setActiveTab("overview")}
-                className={`tactile-btn px-4 py-2.5 text-sm gap-2 whitespace-nowrap ${
+                className={`tactile-btn px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm gap-2 whitespace-nowrap snap-start ${
                   activeTab === "overview"
-                    ? "bg-[#FEF08A] text-slate-900"
-                    : "bg-white text-slate-600 hover:bg-slate-50"
+                    ? "bg-[#FEF08A] dark:bg-amber-400 text-slate-900"
+                    : "bg-white dark:bg-[#1E293B] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-[#27354E]"
                 }`}
               >
                 <Layers size={16} />
@@ -659,10 +807,10 @@ export default function Home() {
 
               <button
                 onClick={() => setActiveTab("categories")}
-                className={`tactile-btn px-4 py-2.5 text-sm gap-2 whitespace-nowrap ${
+                className={`tactile-btn px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm gap-2 whitespace-nowrap snap-start ${
                   activeTab === "categories"
-                    ? "bg-[#DCFCE7] text-slate-900"
-                    : "bg-white text-slate-600 hover:bg-slate-50"
+                    ? "bg-[#DCFCE7] dark:bg-emerald-400 text-slate-900"
+                    : "bg-white dark:bg-[#1E293B] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-[#27354E]"
                 }`}
               >
                 <PieIcon size={16} />
@@ -671,10 +819,10 @@ export default function Home() {
 
               <button
                 onClick={() => setActiveTab("daily")}
-                className={`tactile-btn px-4 py-2.5 text-sm gap-2 whitespace-nowrap ${
+                className={`tactile-btn px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm gap-2 whitespace-nowrap snap-start ${
                   activeTab === "daily"
-                    ? "bg-[#E0F2FE] text-slate-900"
-                    : "bg-white text-slate-600 hover:bg-slate-50"
+                    ? "bg-[#E0F2FE] dark:bg-sky-400 text-slate-900"
+                    : "bg-white dark:bg-[#1E293B] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-[#27354E]"
                 }`}
               >
                 <BarChart3 size={16} />
@@ -683,10 +831,10 @@ export default function Home() {
 
               <button
                 onClick={() => setActiveTab("subscriptions")}
-                className={`tactile-btn px-4 py-2.5 text-sm gap-2 whitespace-nowrap ${
+                className={`tactile-btn px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm gap-2 whitespace-nowrap snap-start ${
                   activeTab === "subscriptions"
-                    ? "bg-[#F3E8FF] text-slate-900"
-                    : "bg-white text-slate-600 hover:bg-slate-50"
+                    ? "bg-[#F3E8FF] dark:bg-purple-400 text-slate-900"
+                    : "bg-white dark:bg-[#1E293B] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-[#27354E]"
                 }`}
               >
                 <CreditCard size={16} />
@@ -695,10 +843,10 @@ export default function Home() {
 
               <button
                 onClick={() => setActiveTab("transactions")}
-                className={`tactile-btn px-4 py-2.5 text-sm gap-2 whitespace-nowrap ${
+                className={`tactile-btn px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm gap-2 whitespace-nowrap snap-start ${
                   activeTab === "transactions"
-                    ? "bg-[#FFE4E6] text-slate-900"
-                    : "bg-white text-slate-600 hover:bg-slate-50"
+                    ? "bg-[#FFE4E6] dark:bg-rose-400 text-slate-900"
+                    : "bg-white dark:bg-[#1E293B] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-[#27354E]"
                 }`}
               >
                 <Search size={16} />
@@ -710,17 +858,19 @@ export default function Home() {
             {/* TAB CONTENT 1: OVERVIEW & PULSE                              */}
             {/* ============================================================ */}
             {activeTab === "overview" && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8">
                 {/* Donut Chart: Top Categories */}
-                <div className="tactile-card p-6 sm:p-8 bg-white">
+                <div className="tactile-card p-5 sm:p-8 bg-white dark:bg-[#131B2E]">
                   <div className="flex items-center justify-between mb-6">
                     <div>
-                      <h3 className="text-2xl font-black text-slate-900">Spending Breakdown</h3>
-                      <p className="text-xs font-bold text-slate-500">Distribution by category</p>
+                      <h3 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
+                        Spending Breakdown
+                      </h3>
+                      <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Distribution by category</p>
                     </div>
                     <button
                       onClick={() => setActiveTab("categories")}
-                      className="text-xs font-black text-indigo-600 hover:underline flex items-center gap-1"
+                      className="text-xs font-black text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
                     >
                       View All <ChevronRight size={14} />
                     </button>
@@ -733,8 +883,8 @@ export default function Home() {
                           data={insights.topCategories}
                           cx="50%"
                           cy="50%"
-                          innerRadius={65}
-                          outerRadius={95}
+                          innerRadius={60}
+                          outerRadius={90}
                           paddingAngle={4}
                           dataKey="total"
                           nameKey="category"
@@ -743,18 +893,19 @@ export default function Home() {
                             <Cell
                               key={`cell-${index}`}
                               fill={entry.color || CATEGORY_COLORS[index % CATEGORY_COLORS.length]}
-                              stroke="#0F172A"
+                              stroke={isDarkMode ? "#0B0F19" : "#0F172A"}
                               strokeWidth={2}
                             />
                           ))}
                         </Pie>
                         <Tooltip
-                          formatter={(value: any) => [`$${Number(value).toFixed(2)}`, "Total"]}
+                          formatter={(value: any) => [formatMoney(Number(value)), "Total"]}
                           contentStyle={{
-                            backgroundColor: "#FFFFFF",
+                            backgroundColor: isDarkMode ? "#1E293B" : "#FFFFFF",
                             borderRadius: "16px",
-                            border: "2px solid #0F172A",
-                            boxShadow: "3px 3px 0px 0px #0F172A",
+                            border: isDarkMode ? "2px solid #38455E" : "2px solid #0F172A",
+                            boxShadow: "3px 3px 0px 0px rgba(0,0,0,0.5)",
+                            color: isDarkMode ? "#F8FAFC" : "#0F172A",
                             fontWeight: "bold",
                             fontFamily: "var(--font-nunito)",
                           }}
@@ -764,16 +915,18 @@ export default function Home() {
                   </div>
 
                   {/* Top 4 Category List */}
-                  <div className="grid grid-cols-2 gap-3 mt-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
                     {insights.topCategories.slice(0, 4).map((cat, idx) => (
                       <div
                         key={idx}
-                        className="p-3 rounded-xl border-2 border-slate-900 bg-slate-50 shadow-[2px_2px_0px_0px_#0f172a] flex items-center gap-2.5"
+                        className="p-3 rounded-xl border-2 border-slate-900 dark:border-slate-700 bg-slate-50 dark:bg-[#1E293B] shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] flex items-center gap-2.5"
                       >
-                        <span className="text-xl">{cat.emoji || "🏷️"}</span>
+                        <span className="text-xl shrink-0">{cat.emoji || "🏷️"}</span>
                         <div className="min-w-0 flex-1">
-                          <p className="text-xs font-black text-slate-900 truncate">{cat.category}</p>
-                          <p className="text-xs font-bold text-slate-500">${cat.total.toFixed(0)} ({cat.percentage}%)</p>
+                          <p className="text-xs font-black text-slate-900 dark:text-white truncate">{cat.category}</p>
+                          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                            {formatMoney(cat.total)} ({cat.percentage}%)
+                          </p>
                         </div>
                       </div>
                     ))}
@@ -781,14 +934,16 @@ export default function Home() {
                 </div>
 
                 {/* Top 5 Biggest Splurges */}
-                <div className="tactile-card p-6 sm:p-8 bg-white flex flex-col justify-between">
+                <div className="tactile-card p-5 sm:p-8 bg-white dark:bg-[#131B2E] flex flex-col justify-between">
                   <div>
                     <div className="flex items-center justify-between mb-6">
                       <div>
-                        <h3 className="text-2xl font-black text-slate-900">Top Splurges</h3>
-                        <p className="text-xs font-bold text-slate-500">Your largest single purchases</p>
+                        <h3 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
+                          Top Splurges
+                        </h3>
+                        <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Your largest single purchases</p>
                       </div>
-                      <span className="text-xs font-black px-2.5 py-1 bg-[#FFE4E6] text-rose-900 border border-slate-900 rounded-full">
+                      <span className="text-xs font-black px-2.5 py-1 bg-[#FFE4E6] dark:bg-rose-950 text-rose-900 dark:text-rose-300 border border-slate-900 dark:border-rose-800 rounded-full">
                         Outflows
                       </span>
                     </div>
@@ -797,41 +952,41 @@ export default function Home() {
                       {insights.largestExpenses.slice(0, 5).map((expense, idx) => (
                         <div
                           key={idx}
-                          className="p-3.5 rounded-2xl bg-white border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] hover:bg-slate-50 transition-colors flex items-center justify-between gap-3"
+                          className="p-3 sm:p-3.5 rounded-2xl bg-white dark:bg-[#1E293B] border-2 border-slate-900 dark:border-slate-700 shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] hover:bg-slate-50 dark:hover:bg-[#27354E] transition-colors flex items-center justify-between gap-3"
                         >
                           <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-7 h-7 rounded-lg bg-[#FEF08A] border border-slate-900 font-black text-xs flex items-center justify-center shrink-0">
+                            <span className="w-7 h-7 rounded-lg bg-[#FEF08A] dark:bg-amber-400 text-slate-900 border border-slate-900 font-black text-xs flex items-center justify-center shrink-0">
                               #{idx + 1}
                             </span>
                             <div className="min-w-0">
-                              <p className="font-black text-sm text-slate-900 truncate">
+                              <p className="font-black text-xs sm:text-sm text-slate-900 dark:text-white truncate">
                                 {expense.description}
                               </p>
-                              <p className="text-xs font-bold text-slate-500 flex items-center gap-2">
+                              <p className="text-xs font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1.5 truncate">
                                 <span>{expense.date}</span>
                                 <span>•</span>
-                                <span className="text-indigo-600">{expense.category}</span>
+                                <span className="text-indigo-600 dark:text-indigo-400 truncate">{expense.category}</span>
                               </p>
                             </div>
                           </div>
-                          <span className="font-black text-base text-rose-600 shrink-0">
-                            -${expense.amount.toFixed(2)}
+                          <span className="font-black text-sm sm:text-base text-rose-600 dark:text-rose-400 shrink-0">
+                            -{formatMoney(expense.amount)}
                           </span>
                         </div>
                       ))}
                     </div>
                   </div>
 
-                  <div className="mt-6 pt-4 border-t border-slate-900/10 flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-500">
-                      Total of top 5 splurges:
+                  <div className="mt-6 pt-4 border-t border-slate-900/10 dark:border-slate-700/60 flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                      Total top splurges:
                     </span>
-                    <span className="text-sm font-black text-slate-900">
-                      $
-                      {insights.largestExpenses
-                        .slice(0, 5)
-                        .reduce((sum, e) => sum + e.amount, 0)
-                        .toFixed(2)}
+                    <span className="text-sm font-black text-slate-900 dark:text-white">
+                      {formatMoney(
+                        insights.largestExpenses
+                          .slice(0, 5)
+                          .reduce((sum, e) => sum + e.amount, 0)
+                      )}
                     </span>
                   </div>
                 </div>
@@ -842,15 +997,17 @@ export default function Home() {
             {/* TAB CONTENT 2: CATEGORIES BREAKDOWN                          */}
             {/* ============================================================ */}
             {activeTab === "categories" && (
-              <div className="tactile-card p-6 sm:p-8 bg-white">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+              <div className="tactile-card p-5 sm:p-8 bg-white dark:bg-[#131B2E]">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 sm:mb-8">
                   <div>
-                    <h3 className="text-3xl font-black text-slate-900">Where Your Money Went</h3>
-                    <p className="text-sm font-bold text-slate-500">
+                    <h3 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white">
+                      Where Your Money Went
+                    </h3>
+                    <p className="text-xs sm:text-sm font-bold text-slate-500 dark:text-slate-400">
                       Categorized breakdown sorted by highest expenditure
                     </p>
                   </div>
-                  <div className="px-4 py-2 bg-[#FEF08A] border-2 border-slate-900 rounded-2xl shadow-[2px_2px_0px_0px_#0f172a] text-xs font-black">
+                  <div className="self-start sm:self-auto px-3.5 py-1.5 bg-[#FEF08A] dark:bg-amber-400 text-slate-900 border-2 border-slate-900 rounded-2xl shadow-[2px_2px_0px_0px_#0f172a] text-xs font-black">
                     {insights.topCategories.length} Categories Identified
                   </div>
                 </div>
@@ -859,33 +1016,35 @@ export default function Home() {
                   {insights.topCategories.map((cat, idx) => (
                     <div
                       key={idx}
-                      className="p-5 rounded-2xl border-2 border-slate-900 bg-white shadow-[3px_3px_0px_0px_#0f172a] hover:bg-slate-50 transition-colors flex flex-col justify-between"
+                      className="p-4 sm:p-5 rounded-2xl border-2 border-slate-900 dark:border-slate-700 bg-white dark:bg-[#1E293B] shadow-[3px_3px_0px_0px_#0f172a] dark:shadow-[3px_3px_0px_0px_#020617] hover:bg-slate-50 dark:hover:bg-[#27354E] transition-colors flex flex-col justify-between gap-3"
                     >
-                      <div className="flex items-start justify-between gap-3 mb-3">
-                        <div className="flex items-center gap-3">
-                          <span className="w-12 h-12 rounded-2xl bg-[#E0F2FE] border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] flex items-center justify-center text-2xl">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#E0F2FE] dark:bg-sky-950 border-2 border-slate-900 dark:border-sky-800 shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] flex items-center justify-center text-xl sm:text-2xl shrink-0">
                             {cat.emoji || "🏷️"}
                           </span>
-                          <div>
-                            <h4 className="font-black text-base text-slate-900">{cat.category}</h4>
-                            <p className="text-xs font-bold text-slate-500">
+                          <div className="min-w-0">
+                            <h4 className="font-black text-sm sm:text-base text-slate-900 dark:text-white truncate">
+                              {cat.category}
+                            </h4>
+                            <p className="text-xs font-bold text-slate-500 dark:text-slate-400">
                               {cat.count ? `${cat.count} purchases` : "Multiple charges"}
                             </p>
                           </div>
                         </div>
 
-                        <div className="text-right">
-                          <div className="font-black text-xl text-slate-900">
-                            ${cat.total.toFixed(2)}
+                        <div className="text-right shrink-0">
+                          <div className="font-black text-base sm:text-xl text-slate-900 dark:text-white">
+                            {formatMoney(cat.total)}
                           </div>
-                          <span className="text-xs font-black px-2 py-0.5 bg-[#DCFCE7] border border-slate-900 rounded-full">
+                          <span className="text-xs font-black px-2 py-0.5 bg-[#DCFCE7] dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-slate-900 dark:border-emerald-800 rounded-full">
                             {cat.percentage}% of spend
                           </span>
                         </div>
                       </div>
 
                       {/* Percentage Bar */}
-                      <div className="w-full bg-slate-100 rounded-full h-3 border border-slate-900 overflow-hidden">
+                      <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-3 border border-slate-900 dark:border-slate-700 overflow-hidden">
                         <div
                           className="h-full rounded-full transition-all duration-500"
                           style={{
@@ -904,44 +1063,47 @@ export default function Home() {
             {/* TAB CONTENT 3: DAILY SPENDING PULSE                          */}
             {/* ============================================================ */}
             {activeTab === "daily" && (
-              <div className="tactile-card p-6 sm:p-8 bg-white">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+              <div className="tactile-card p-5 sm:p-8 bg-white dark:bg-[#131B2E]">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
                   <div>
-                    <h3 className="text-3xl font-black text-slate-900">Daily Spending Pulse</h3>
-                    <p className="text-sm font-bold text-slate-500">
+                    <h3 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white">
+                      Daily Spending Pulse
+                    </h3>
+                    <p className="text-xs sm:text-sm font-bold text-slate-500 dark:text-slate-400">
                       Chronological day-by-day cash outlays
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="px-3 py-1.5 bg-[#E0F2FE] border-2 border-slate-900 rounded-xl text-xs font-black shadow-[2px_2px_0px_0px_#0f172a]">
-                      Avg Daily: ${(insights.averageDailySpend || insights.totalSpent / 30).toFixed(2)}
+                    <span className="px-3 py-1.5 bg-[#E0F2FE] dark:bg-sky-950 text-slate-900 dark:text-sky-300 border-2 border-slate-900 dark:border-sky-800 rounded-xl text-xs font-black shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617]">
+                      Avg Daily: {formatMoney(insights.averageDailySpend || insights.totalSpent / 30)}
                     </span>
                   </div>
                 </div>
 
-                <div className="h-80 sm:h-96 w-full">
+                <div className="h-72 sm:h-96 w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={insights.dailySpending}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                    <BarChart data={insights.dailySpending} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDarkMode ? "#334155" : "#E2E8F0"} />
                       <XAxis
                         dataKey="date"
-                        tick={{ fontFamily: "var(--font-nunito)", fontWeight: 700, fontSize: 12, fill: "#475569" }}
-                        stroke="#0F172A"
+                        tick={{ fontFamily: "var(--font-nunito)", fontWeight: 700, fontSize: 11, fill: isDarkMode ? "#94A3B8" : "#475569" }}
+                        stroke={isDarkMode ? "#475569" : "#0F172A"}
                         strokeWidth={1.5}
                       />
                       <YAxis
-                        tick={{ fontFamily: "var(--font-nunito)", fontWeight: 700, fontSize: 12, fill: "#475569" }}
-                        stroke="#0F172A"
+                        tick={{ fontFamily: "var(--font-nunito)", fontWeight: 700, fontSize: 11, fill: isDarkMode ? "#94A3B8" : "#475569" }}
+                        stroke={isDarkMode ? "#475569" : "#0F172A"}
                         strokeWidth={1.5}
-                        tickFormatter={(val) => `$${val}`}
+                        tickFormatter={(val) => `${currencySymbol}${val >= 1000 ? `${(val / 1000).toFixed(0)}k` : val}`}
                       />
                       <Tooltip
-                        formatter={(val: any) => [`$${Number(val).toFixed(2)}`, "Daily Total"]}
+                        formatter={(val: any) => [formatMoney(Number(val)), "Daily Total"]}
                         contentStyle={{
-                          backgroundColor: "#FFFFFF",
+                          backgroundColor: isDarkMode ? "#1E293B" : "#FFFFFF",
                           borderRadius: "16px",
-                          border: "2px solid #0F172A",
-                          boxShadow: "3px 3px 0px 0px #0F172A",
+                          border: isDarkMode ? "2px solid #38455E" : "2px solid #0F172A",
+                          boxShadow: "3px 3px 0px 0px rgba(0,0,0,0.5)",
+                          color: isDarkMode ? "#F8FAFC" : "#0F172A",
                           fontWeight: "bold",
                           fontFamily: "var(--font-nunito)",
                         }}
@@ -949,7 +1111,7 @@ export default function Home() {
                       <Bar
                         dataKey="total"
                         fill="#2563EB"
-                        stroke="#0F172A"
+                        stroke={isDarkMode ? "#1E3A8A" : "#0F172A"}
                         strokeWidth={1.5}
                         radius={[6, 6, 0, 0]}
                       />
@@ -957,10 +1119,10 @@ export default function Home() {
                   </ResponsiveContainer>
                 </div>
 
-                <div className="mt-6 p-4 rounded-2xl bg-[#FEF9C3]/50 border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] flex items-center gap-3">
+                <div className="mt-6 p-4 rounded-2xl bg-[#FEF9C3]/50 dark:bg-amber-950/30 border-2 border-slate-900 dark:border-amber-800/60 shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] flex items-center gap-3">
                   <span className="text-2xl">💡</span>
-                  <p className="text-xs sm:text-sm font-bold text-slate-800">
-                    Spikes usually correspond to rent payments, grocery bulk runs, or weekend activities. Hover over any bar to inspect specific day totals.
+                  <p className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-300">
+                    Spikes indicate high-spend days like rent, bulk supermarket visits, or weekend activities. Hover over any bar to view the exact outlay.
                   </p>
                 </div>
               </div>
@@ -970,17 +1132,22 @@ export default function Home() {
             {/* TAB CONTENT 4: SUBSCRIPTIONS RADAR                           */}
             {/* ============================================================ */}
             {activeTab === "subscriptions" && (
-              <div className="tactile-card p-6 sm:p-8 bg-white">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+              <div className="tactile-card p-5 sm:p-8 bg-white dark:bg-[#131B2E]">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
                   <div>
-                    <h3 className="text-3xl font-black text-slate-900">Subscription Radar</h3>
-                    <p className="text-sm font-bold text-slate-500">
+                    <h3 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white">
+                      Subscription Radar
+                    </h3>
+                    <p className="text-xs sm:text-sm font-bold text-slate-500 dark:text-slate-400">
                       Recurring monthly bills and memberships detected by AI
                     </p>
                   </div>
-                  <div className="px-4 py-2 bg-[#F3E8FF] border-2 border-slate-900 rounded-2xl shadow-[2px_2px_0px_0px_#0f172a] text-xs font-black">
-                    Monthly Drain: $
-                    {(insights.subscriptions?.reduce((sum, s) => sum + s.amount, 0) || 0).toFixed(2)} / mo
+                  <div className="self-start sm:self-auto px-3.5 py-1.5 bg-[#F3E8FF] dark:bg-purple-950 text-slate-900 dark:text-purple-300 border-2 border-slate-900 dark:border-purple-800 rounded-2xl shadow-[2px_2px_0px_0px_#0f172a] text-xs font-black">
+                    Monthly Drain:{" "}
+                    {formatMoney(
+                      insights.subscriptions?.reduce((sum, s) => sum + s.amount, 0) || 0
+                    )}{" "}
+                    / mo
                   </div>
                 </div>
 
@@ -993,23 +1160,27 @@ export default function Home() {
                     {insights.subscriptions.map((sub, idx) => (
                       <div
                         key={idx}
-                        className="p-5 rounded-2xl bg-white border-2 border-slate-900 shadow-[3px_3px_0px_0px_#0f172a] flex items-center justify-between"
+                        className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-[#1E293B] border-2 border-slate-900 dark:border-slate-700 shadow-[3px_3px_0px_0px_#0f172a] dark:shadow-[3px_3px_0px_0px_#020617] flex items-center justify-between gap-3"
                       >
-                        <div className="flex items-center gap-3">
-                          <div className="w-12 h-12 rounded-2xl bg-[#E0F2FE] border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] flex items-center justify-center text-xl">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#E0F2FE] dark:bg-sky-950 border-2 border-slate-900 dark:border-sky-800 shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] flex items-center justify-center text-xl shrink-0">
                             💳
                           </div>
-                          <div>
-                            <h4 className="font-black text-base text-slate-900">{sub.name}</h4>
-                            <span className="text-xs font-bold text-slate-500">{sub.category}</span>
+                          <div className="min-w-0">
+                            <h4 className="font-black text-sm sm:text-base text-slate-900 dark:text-white truncate">
+                              {sub.name}
+                            </h4>
+                            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 truncate block">
+                              {sub.category}
+                            </span>
                           </div>
                         </div>
 
-                        <div className="text-right">
-                          <span className="text-lg font-black text-slate-900">
-                            ${sub.amount.toFixed(2)}
+                        <div className="text-right shrink-0">
+                          <span className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                            {formatMoney(sub.amount)}
                           </span>
-                          <p className="text-xs font-bold text-slate-500">/ mo</p>
+                          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">/ mo</p>
                         </div>
                       </div>
                     ))}
@@ -1019,80 +1190,173 @@ export default function Home() {
             )}
 
             {/* ============================================================ */}
-            {/* TAB CONTENT 5: ALL TRANSACTIONS LOG                          */}
+            {/* TAB CONTENT 5: ALL TRANSACTIONS (CLEAN, SORTED, FORMATTED)   */}
             {/* ============================================================ */}
             {activeTab === "transactions" && (
-              <div className="tactile-card p-6 sm:p-8 bg-white">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+              <div className="tactile-card p-5 sm:p-8 bg-white dark:bg-[#131B2E]">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
                   <div>
-                    <h3 className="text-3xl font-black text-slate-900">All Transactions</h3>
-                    <p className="text-sm font-bold text-slate-500">
-                      Search and filter all extracted line items
+                    <h3 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white">
+                      All Transactions
+                    </h3>
+                    <p className="text-xs sm:text-sm font-bold text-slate-500 dark:text-slate-400">
+                      Cleanly sorted starting with your most recent transaction
                     </p>
                   </div>
-                  <span className="px-3 py-1 bg-slate-100 border border-slate-900 rounded-full text-xs font-black">
-                    {filteredTransactions.length} items shown
+                  <span className="self-start sm:self-auto px-3 py-1 bg-slate-100 dark:bg-slate-800 border border-slate-900 dark:border-slate-700 rounded-full text-xs font-black text-slate-800 dark:text-slate-300">
+                    {filteredAndSortedTransactions.length} Total Items
                   </span>
                 </div>
 
-                {/* Search Bar & Filter Chips */}
-                <div className="flex flex-col sm:flex-row gap-3 mb-6">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                {/* Search Bar, Category Filter, Type Filter & Sort Options */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+                  {/* Search Input */}
+                  <div className="relative">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={17} />
                     <input
                       type="text"
-                      placeholder="Search transactions (e.g. Coffee, Uber, Rent)..."
+                      placeholder="Search description..."
                       value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full pl-10 pr-4 py-3 rounded-2xl border-2 border-slate-900 font-bold text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+                      onChange={(e) => {
+                        setSearchQuery(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      className="w-full pl-10 pr-3 py-2.5 rounded-2xl border-2 border-slate-900 dark:border-slate-700 bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 font-bold text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
                     />
                   </div>
 
+                  {/* Category Filter */}
                   <select
                     value={selectedCategoryFilter}
-                    onChange={(e) => setSelectedCategoryFilter(e.target.value)}
-                    className="px-4 py-3 rounded-2xl border-2 border-slate-900 font-bold text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300 cursor-pointer"
+                    onChange={(e) => {
+                      setSelectedCategoryFilter(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="px-3 py-2.5 rounded-2xl border-2 border-slate-900 dark:border-slate-700 font-bold text-xs sm:text-sm bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-300 cursor-pointer"
                   >
                     <option value="all">All Categories</option>
                     {availableCategories.map((c, i) => (
                       <option key={i} value={c}>{c}</option>
                     ))}
                   </select>
+
+                  {/* Type Filter */}
+                  <select
+                    value={selectedTypeFilter}
+                    onChange={(e) => {
+                      setSelectedTypeFilter(e.target.value as any);
+                      setCurrentPage(1);
+                    }}
+                    className="px-3 py-2.5 rounded-2xl border-2 border-slate-900 dark:border-slate-700 font-bold text-xs sm:text-sm bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-300 cursor-pointer"
+                  >
+                    <option value="all">All Flows (In & Out)</option>
+                    <option value="expense">Expenses Only (-)</option>
+                    <option value="income">Income Only (+)</option>
+                  </select>
+
+                  {/* Sort Selector: Newest First by default */}
+                  <div className="relative">
+                    <select
+                      value={transactionSort}
+                      onChange={(e) => {
+                        setTransactionSort(e.target.value as any);
+                        setCurrentPage(1);
+                      }}
+                      className="w-full px-3 py-2.5 rounded-2xl border-2 border-slate-900 dark:border-slate-700 font-bold text-xs sm:text-sm bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-300 cursor-pointer"
+                    >
+                      <option value="newest">🕒 Newest First (Latest)</option>
+                      <option value="oldest">📅 Oldest First</option>
+                      <option value="highest">💰 Highest Amount</option>
+                      <option value="lowest">🪙 Lowest Amount</option>
+                    </select>
+                  </div>
                 </div>
 
-                {/* Transactions Table / List */}
+                {/* Formatted Transaction Rows */}
                 <div className="space-y-2.5">
-                  {filteredTransactions.length === 0 ? (
+                  {paginatedTransactions.length === 0 ? (
                     <div className="py-12 text-center text-slate-500 font-bold">
                       No transactions match your search filter.
                     </div>
                   ) : (
-                    filteredTransactions.map((tx, idx) => (
+                    paginatedTransactions.map((tx, idx) => (
                       <div
                         key={idx}
-                        className="p-3.5 rounded-2xl border-2 border-slate-900 bg-white shadow-[2px_2px_0px_0px_#0f172a] hover:bg-slate-50 transition-colors flex items-center justify-between gap-4"
+                        className="p-3.5 sm:p-4 rounded-2xl border-2 border-slate-900 dark:border-slate-700 bg-white dark:bg-[#1E293B] shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] hover:bg-slate-50 dark:hover:bg-[#27354E] transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                       >
+                        {/* Left: Date Badge + Merchant & Category */}
                         <div className="flex items-center gap-3 min-w-0">
-                          <span className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-900 flex items-center justify-center text-sm font-black text-slate-600 shrink-0">
-                            {tx.date}
-                          </span>
+                          {/* Clean Date Pill */}
+                          <div className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-900 dark:border-slate-700 text-center shrink-0 min-w-[76px]">
+                            <span className="block text-xs font-black text-slate-800 dark:text-slate-200">
+                              {tx.date}
+                            </span>
+                          </div>
+
+                          {/* Merchant & Category */}
                           <div className="min-w-0">
-                            <p className="font-black text-sm text-slate-900 truncate">{tx.description}</p>
-                            <span className="text-xs font-bold text-indigo-600">{tx.category}</span>
+                            <p className="font-black text-sm text-slate-900 dark:text-white truncate">
+                              {tx.description}
+                            </p>
+                            <span className="inline-block text-xs font-bold text-indigo-600 dark:text-indigo-400">
+                              {tx.category}
+                            </span>
                           </div>
                         </div>
 
-                        <span
-                          className={`font-black text-base shrink-0 ${
-                            tx.type === "income" ? "text-emerald-600" : "text-slate-900"
-                          }`}
-                        >
-                          {tx.type === "income" ? "+" : "-"}${tx.amount.toFixed(2)}
-                        </span>
+                        {/* Right: Amount & Direction Tag */}
+                        <div className="flex items-center justify-between sm:justify-end gap-3 self-end sm:self-center shrink-0">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-xs font-black border ${
+                              tx.type === "income"
+                                ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-500"
+                                : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700"
+                            }`}
+                          >
+                            {tx.type === "income" ? "Credit" : "Debit"}
+                          </span>
+
+                          <span
+                            className={`font-black text-base sm:text-lg ${
+                              tx.type === "income"
+                                ? "text-emerald-600 dark:text-emerald-400"
+                                : "text-slate-900 dark:text-white"
+                            }`}
+                          >
+                            {tx.type === "income" ? "+" : "-"}{formatMoney(tx.amount)}
+                          </span>
+                        </div>
                       </div>
                     ))
                   )}
                 </div>
+
+                {/* Pagination Controls */}
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between mt-6 pt-4 border-t border-slate-900/10 dark:border-slate-700/60">
+                    <button
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      disabled={currentPage === 1}
+                      className="tactile-btn px-3 py-1.5 text-xs sm:text-sm bg-white dark:bg-[#1E293B] text-slate-700 dark:text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed gap-1"
+                    >
+                      <ChevronLeft size={15} />
+                      <span>Previous</span>
+                    </button>
+
+                    <span className="text-xs font-black text-slate-600 dark:text-slate-400">
+                      Page {currentPage} of {totalPages}
+                    </span>
+
+                    <button
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      disabled={currentPage === totalPages}
+                      className="tactile-btn px-3 py-1.5 text-xs sm:text-sm bg-white dark:bg-[#1E293B] text-slate-700 dark:text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed gap-1"
+                    >
+                      <span>Next</span>
+                      <ChevronRight size={15} />
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1100,46 +1364,69 @@ export default function Home() {
       </main>
 
       {/* ============================================================ */}
-      {/* SETTINGS MODAL (CLEAN & NON-INTRUSIVE)                       */}
+      {/* SETTINGS MODAL                                               */}
       {/* ============================================================ */}
       {showSettings && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="tactile-card w-full max-w-lg p-6 sm:p-8 bg-white relative animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 dark:bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="tactile-card w-full max-w-lg p-6 sm:p-8 bg-white dark:bg-[#131B2E] relative animate-in fade-in zoom-in-95 duration-200">
             {/* Close Button */}
             <button
               onClick={() => setShowSettings(false)}
-              className="absolute top-6 right-6 p-2 rounded-xl hover:bg-slate-100 text-slate-700 transition-colors border border-slate-200"
+              className="absolute top-6 right-6 p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors border border-slate-200 dark:border-slate-700"
             >
               <X size={18} />
             </button>
 
             <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-xl bg-[#FEF08A] border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] flex items-center justify-center text-xl">
+              <div className="w-10 h-10 rounded-xl bg-[#FEF08A] dark:bg-amber-400 border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] flex items-center justify-center text-xl">
                 ⚙️
               </div>
-              <h2 className="text-2xl font-black text-slate-900">Settings</h2>
+              <h2 className="text-2xl font-black text-slate-900 dark:text-white">Settings</h2>
             </div>
 
-            <p className="text-sm font-bold text-slate-500 mb-6">
+            <p className="text-xs sm:text-sm font-bold text-slate-500 dark:text-slate-400 mb-6">
               Connect your Google Gemini API key to read and analyze real bank statement PDFs.
             </p>
 
+            {/* Currency Preference in Settings */}
+            <div className="mb-5">
+              <label className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 block mb-2">
+                Currency Display
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {CURRENCY_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.code}
+                    type="button"
+                    onClick={() => handleCurrencyChange(opt.symbol)}
+                    className={`p-2.5 rounded-xl border-2 font-black text-xs text-left transition-all ${
+                      currencySymbol === opt.symbol
+                        ? "border-slate-900 dark:border-amber-400 bg-[#FEF08A] dark:bg-amber-400 text-slate-900 shadow-[2px_2px_0px_0px_#0f172a]"
+                        : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#1E293B] text-slate-700 dark:text-slate-300"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Privacy Guarantee Note */}
-            <div className="p-4 rounded-2xl bg-[#DCFCE7]/70 border-2 border-slate-900 shadow-[2px_2px_0px_0px_#0f172a] mb-6">
+            <div className="p-4 rounded-2xl bg-[#DCFCE7]/70 dark:bg-emerald-950/40 border-2 border-slate-900 dark:border-emerald-800 shadow-[2px_2px_0px_0px_#0f172a] dark:shadow-[2px_2px_0px_0px_#020617] mb-6">
               <div className="flex items-center gap-2 mb-1">
-                <ShieldCheck size={18} className="text-emerald-700" />
-                <span className="text-xs font-black text-emerald-950 uppercase tracking-wide">
+                <ShieldCheck size={18} className="text-emerald-700 dark:text-emerald-400" />
+                <span className="text-xs font-black text-emerald-950 dark:text-emerald-300 uppercase tracking-wide">
                   Zero Server Privacy
                 </span>
               </div>
-              <p className="text-xs font-bold text-emerald-900 leading-relaxed">
-                Your API key and bank statements never pass through our servers. Everything runs 100% locally in your browser using the official Gemini SDK.
+              <p className="text-xs font-bold text-emerald-900 dark:text-emerald-200 leading-relaxed">
+                Your API key and bank statements never pass through any server. Everything runs 100% locally in your browser using the Gemini SDK.
               </p>
             </div>
 
             {/* Input field */}
             <div className="space-y-2 mb-6">
-              <label className="text-xs font-black uppercase tracking-wider text-slate-700">
+              <label className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300">
                 Gemini API Key
               </label>
               <input
@@ -1147,23 +1434,23 @@ export default function Home() {
                 placeholder="AIzaSy..."
                 value={tempKey}
                 onChange={(e) => setTempKey(e.target.value)}
-                className="w-full p-4 rounded-2xl border-2 border-slate-900 font-mono text-sm font-bold focus:outline-none focus:ring-2 focus:ring-amber-300"
+                className="w-full p-3.5 sm:p-4 rounded-2xl border-2 border-slate-900 dark:border-slate-700 bg-white dark:bg-[#1E293B] text-slate-900 dark:text-slate-100 font-mono text-sm font-bold focus:outline-none focus:ring-2 focus:ring-amber-300"
               />
               <div className="flex items-center justify-between pt-1">
                 <a
                   href="https://aistudio.google.com/app/apikey"
                   target="_blank"
                   rel="noreferrer"
-                  className="text-xs font-black text-blue-600 hover:underline inline-flex items-center gap-1"
+                  className="text-xs font-black text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
                 >
-                  <span>Get a free key from Google AI Studio</span>
+                  <span>Get free key from Google AI Studio</span>
                   <ExternalLink size={12} />
                 </a>
 
                 {apiKey && (
                   <button
                     onClick={handleClearApiKey}
-                    className="text-xs font-bold text-rose-600 hover:underline"
+                    className="text-xs font-bold text-rose-600 dark:text-rose-400 hover:underline"
                   >
                     Clear Key
                   </button>
@@ -1175,14 +1462,14 @@ export default function Home() {
             <div className="flex items-center justify-end gap-3">
               <button
                 onClick={() => setShowSettings(false)}
-                className="tactile-btn px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm"
+                className="tactile-btn px-4 sm:px-5 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-sm"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSaveApiKey}
                 disabled={!tempKey.trim()}
-                className="tactile-btn px-6 py-2.5 bg-[#FEF08A] hover:bg-[#FDE047] text-slate-900 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                className="tactile-btn px-5 sm:px-6 py-2.5 bg-[#FEF08A] dark:bg-amber-400 hover:bg-[#FDE047] text-slate-900 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Save & Connect
               </button>

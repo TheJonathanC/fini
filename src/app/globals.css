@@ -4,19 +4,31 @@
   * {
     border-color: #e2e8f0;
   }
+  .dark * {
+    border-color: #334155;
+  }
 }
 
 :root {
   --font-sans: var(--font-nunito), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --bg-page: #FAF8F5;
+  --text-main: #0F172A;
+  --grid-dot: #E2E8F0;
+}
+
+.dark {
+  --bg-page: #0B0F19;
+  --text-main: #F8FAFC;
+  --grid-dot: #1E293B;
 }
 
 body {
   background-color: var(--bg-page);
-  color: #0F172A;
+  color: var(--text-main);
   font-family: var(--font-sans);
-  background-image: radial-gradient(#E2E8F0 1px, transparent 1px);
+  background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
   background-size: 24px 24px;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 /* Playful, tactile, sleek neo-fintech styles */
@@ -25,7 +37,14 @@ body {
   border: 2px solid #0F172A;
   border-radius: 1.5rem;
   box-shadow: 4px 4px 0px 0px #0F172A;
-  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.15s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.dark .tactile-card {
+  background-color: #131B2E;
+  border-color: #38455E;
+  box-shadow: 4px 4px 0px 0px #020617;
+  color: #F8FAFC;
 }
 
 .tactile-card:hover {
@@ -33,11 +52,22 @@ body {
   box-shadow: 5px 6px 0px 0px #0F172A;
 }
 
+.dark .tactile-card:hover {
+  box-shadow: 5px 6px 0px 0px #020617;
+}
+
 .tactile-card-static {
   background-color: #FFFFFF;
   border: 2px solid #0F172A;
   border-radius: 1.5rem;
   box-shadow: 4px 4px 0px 0px #0F172A;
+}
+
+.dark .tactile-card-static {
+  background-color: #131B2E;
+  border-color: #38455E;
+  box-shadow: 4px 4px 0px 0px #020617;
+  color: #F8FAFC;
 }
 
 .tactile-btn {
@@ -51,14 +81,27 @@ body {
   justify-content: center;
 }
 
+.dark .tactile-btn {
+  border-color: #38455E;
+  box-shadow: 3px 3px 0px 0px #020617;
+}
+
 .tactile-btn:hover {
   transform: translate(-1px, -1px);
   box-shadow: 4px 4px 0px 0px #0F172A;
 }
 
+.dark .tactile-btn:hover {
+  box-shadow: 4px 4px 0px 0px #020617;
+}
+
 .tactile-btn:active {
   transform: translate(2px, 2px);
   box-shadow: 1px 1px 0px 0px #0F172A;
+}
+
+.dark .tactile-btn:active {
+  box-shadow: 1px 1px 0px 0px #020617;
 }
 
 .tactile-badge {
@@ -68,7 +111,12 @@ body {
   font-weight: 700;
 }
 
-/* Custom scrollbar for clean minimal look */
+.dark .tactile-badge {
+  border-color: #38455E;
+  box-shadow: 2px 2px 0px 0px #020617;
+}
+
+/* Custom scrollbars */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -79,12 +127,25 @@ body {
   border-radius: 4px;
 }
 
+.dark ::-webkit-scrollbar-track {
+  background: #0F172A;
+}
+
 ::-webkit-scrollbar-thumb {
   background: #CBD5E1;
   border-radius: 4px;
   border: 2px solid #F1F5F9;
 }
 
+.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-color: #0F172A;
+}
+
 ::-webkit-scrollbar-thumb:hover {
   background: #94A3B8;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
 }

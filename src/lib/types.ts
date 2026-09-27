@@ -1,5 +1,6 @@
 export interface Transaction {
-  date: string;
+  date: string; // Formatted date e.g. "28 Sep 2026" or "Sep 28"
+  isoDate?: string; // YYYY-MM-DD for reliable sorting
   description: string;
   amount: number;
   category: string;
@@ -17,6 +18,7 @@ export interface CategorySummary {
 
 export interface DailySpending {
   date: string;
+  isoDate?: string;
   total: number;
   dayOfWeek?: string;
 }
@@ -29,6 +31,8 @@ export interface SubscriptionItem {
 }
 
 export interface FinancialInsights {
+  currencySymbol?: string; // e.g. "₹", "$", "€", "£"
+  currencyCode?: string; // e.g. "INR", "USD", "EUR"
   statementPeriod?: string;
   accountHolder?: string;
   totalSpent: number;
