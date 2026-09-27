@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@variant dark (&:where(.dark, .dark *));
+
 @layer base {
   * {
     border-color: #e2e8f0;
@@ -28,7 +30,7 @@ body {
   font-family: var(--font-sans);
   background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
   background-size: 24px 24px;
-  transition: background-color 0.2s ease, color 0.2s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 /* Playful, tactile, sleek neo-fintech styles */
@@ -37,7 +39,7 @@ body {
   border: 2px solid #0F172A;
   border-radius: 1.5rem;
   box-shadow: 4px 4px 0px 0px #0F172A;
-  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.15s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.2s ease, border-color 0.2s ease;
+  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.15s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .dark .tactile-card {

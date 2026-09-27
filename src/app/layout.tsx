@@ -23,8 +23,27 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={nunito.variable}>
-      <body className="font-sans antialiased text-slate-900 selection:bg-yellow-200 selection:text-slate-900 min-h-screen">
+    <html lang="en" className={nunito.variable} suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                try {
+                  var stored = localStorage.getItem('fini_theme');
+                  var system = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                  if (stored === 'dark' || (!stored && system)) {
+                    document.documentElement.classList.add('dark');
+                  } else {
+                    document.documentElement.classList.remove('dark');
+                  }
+                } catch(e) {}
+              })();
+            `,
+          }}
+        />
+      </head>
+      <body className="font-sans antialiased bg-[#FAF8F5] dark:bg-[#0B0F19] text-slate-900 dark:text-slate-100 selection:bg-amber-200 selection:text-slate-900 min-h-screen transition-colors">
         {children}
       </body>
     </html>
