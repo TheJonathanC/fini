@@ -146,10 +146,13 @@ export default function Home() {
       setCurrencySymbol(storedCurrency);
     }
 
-    // Stored model preference
+    // Stored model preference - ensure stable default (Gemini 2.5 Flash)
     const storedModel = localStorage.getItem("fini_gemini_model");
-    if (storedModel) {
+    if (storedModel && storedModel !== "gemini-3.8-flash") {
       setSelectedModel(storedModel);
+    } else {
+      setSelectedModel(DEFAULT_MODEL);
+      localStorage.setItem("fini_gemini_model", DEFAULT_MODEL);
     }
 
     // API Key
@@ -596,6 +599,23 @@ export default function Home() {
                     <Settings size={13} />
                     <span>Change Model in Settings</span>
                   </button>
+
+                  {selectedModel === "gemini-3.8-flash" && (
+                    <button
+                      onClick={() => {
+                        handleModelChange("gemini-2.5-flash");
+                        if (lastUploadedFile) {
+                          handleProcessFile(lastUploadedFile);
+                        } else {
+                          setError(null);
+                        }
+                      }}
+                      className="tactile-btn px-3 py-1.5 bg-emerald-100 dark:bg-emerald-950 hover:bg-emerald-200 dark:hover:bg-emerald-900 text-emerald-950 dark:text-emerald-200 text-xs font-black inline-flex items-center gap-1.5"
+                    >
+                      <Zap size={13} />
+                      <span>Switch to Gemini 2.5 Flash {lastUploadedFile ? "& Retry" : ""}</span>
+                    </button>
+                  )}
 
                   {error.code === "RATE_LIMIT_EXCEEDED" && selectedModel !== "gemini-2.0-flash" && (
                     <button

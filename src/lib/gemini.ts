@@ -225,7 +225,9 @@ CRITICAL EXTRACTION REQUIREMENTS:
 4. TRANSACTION SORTING:
    - In "allTransactions", sort transactions chronologically from NEWEST / MOST RECENT to OLDEST.
 
-You MUST return ONLY a valid JSON object matching this structure:
+CRITICAL OUTPUT INSTRUCTION:
+You MUST return ONLY a single, valid raw JSON object matching the exact structure below.
+Do NOT include markdown code fences, backticks, conversational preambles, or any text outside the JSON:
 {
   "currencySymbol": string (e.g. "₹", "$", "€", "£"),
   "currencyCode": string (e.g. "INR", "USD", "EUR", "GBP"),
@@ -297,6 +299,161 @@ function getFallbackModel(primaryModel: string): string | null {
   return null;
 }
 
+/**
+ * Resilient JSON parser that strips markdown fences, conversational preambles,
+ * trailing commas, and repairs truncated JSON responses caused by token limits.
+ */
+export function cleanAndParseJson(rawText: string): any {
+  if (!rawText || typeof rawText !== "string") {
+    throw new Error("Empty response received from Gemini.");
+  }
+
+  let text = rawText.trim();
+
+  // Strip markdown code fences if present
+  text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+
+  // 1. Direct parse attempt
+  try {
+    return JSON.parse(text);
+  } catch (_e1) {
+    // Continue to substring extraction
+  }
+
+  // 2. Find outermost JSON object {...}
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    let candidate = text.slice(firstBrace, lastBrace + 1);
+    candidate = candidate.replace(/,(\s*[}\]])/g, "$1");
+    try {
+      return JSON.parse(candidate);
+    } catch (_e2) {
+      // Continue to truncated repair
+    }
+  }
+
+  // 3. Repair truncated or cut-off JSON (often happens if statement output exceeds token limit)
+  if (firstBrace !== -1) {
+    try {
+      let candidate = text.slice(firstBrace);
+      candidate = candidate.replace(/,\s*$/g, "");
+
+      let inString = false;
+      let escaped = false;
+      for (let i = 0; i < candidate.length; i++) {
+        const char = candidate[i];
+        if (char === "\\" && !escaped) {
+          escaped = true;
+          continue;
+        }
+        if (char === '"' && !escaped) {
+          inString = !inString;
+        }
+        escaped = false;
+      }
+      if (inString) {
+        candidate += '"';
+      }
+
+      // Strip incomplete trailing key/value pair
+      candidate = candidate.replace(/,\s*"[^"]*"\s*:\s*"?[^"]*$/g, "");
+      candidate = candidate.replace(/,\s*"[^"]*"?\s*$/g, "");
+      candidate = candidate.replace(/,\s*$/g, "");
+
+      // Balance open braces and brackets
+      const stack: string[] = [];
+      inString = false;
+      escaped = false;
+      for (let i = 0; i < candidate.length; i++) {
+        const char = candidate[i];
+        if (char === "\\" && !escaped) {
+          escaped = true;
+          continue;
+        }
+        if (char === '"' && !escaped) {
+          inString = !inString;
+        } else if (!inString) {
+          if (char === "{" || char === "[") {
+            stack.push(char);
+          } else if (char === "}" && stack[stack.length - 1] === "{") {
+            stack.pop();
+          } else if (char === "]" && stack[stack.length - 1] === "[") {
+            stack.pop();
+          }
+        }
+        escaped = false;
+      }
+
+      while (stack.length > 0) {
+        const open = stack.pop();
+        if (open === "{") candidate += "}";
+        else if (open === "[") candidate += "]";
+      }
+
+      candidate = candidate.replace(/,(\s*[}\]])/g, "$1");
+      return JSON.parse(candidate);
+    } catch (_e3) {
+      // Continue to error construction
+    }
+  }
+
+  // If text does not contain valid JSON, check if it's a plain message from the model
+  const cleanSnippet = text.replace(/[\r\n]+/g, " ").slice(0, 200).trim();
+  throw new Error(
+    cleanSnippet.length > 0
+      ? `Model output: "${cleanSnippet}"`
+      : "The model response did not contain a valid JSON structure."
+  );
+}
+
+function parseAndBuildInsights(rawText: string): FinancialInsights {
+  const parsed = cleanAndParseJson(rawText);
+
+  const currencySymbol = parsed.currencySymbol || "₹";
+  const currencyCode = parsed.currencyCode || "INR";
+
+  // Clean, normalize and sort transactions newest first using robust parser
+  const rawTransactions: Transaction[] = Array.isArray(parsed.allTransactions) ? parsed.allTransactions : [];
+  const formattedTransactions: Transaction[] = rawTransactions.map((tx: any) => {
+    const cleanDate = formatDisplayDate(tx?.isoDate || tx?.date);
+    return {
+      ...tx,
+      date: cleanDate || tx?.date || "Unknown Date",
+      isoDate: tx?.isoDate || cleanDate,
+      amount: Math.abs(Number(tx?.amount) || 0)
+    };
+  });
+
+  const sortedTransactions = formattedTransactions.sort((a, b) => {
+    return parseDateToTimestamp(b.isoDate || b.date) - parseDateToTimestamp(a.isoDate || a.date);
+  });
+
+  return {
+    currencySymbol,
+    currencyCode,
+    statementPeriod: parsed.statementPeriod || "Current Statement",
+    accountHolder: parsed.accountHolder || "Account Holder",
+    totalSpent: Number(parsed.totalSpent || 0),
+    totalIncome: Number(parsed.totalIncome || 0),
+    netSavings: Number(parsed.netSavings ?? ((parsed.totalIncome || 0) - (parsed.totalSpent || 0))),
+    savingsRate: Number(parsed.savingsRate ?? (parsed.totalIncome > 0 ? Math.round((((parsed.totalIncome - parsed.totalSpent) / parsed.totalIncome) * 100) * 10) / 10 : 0)),
+    averageDailySpend: Number(parsed.averageDailySpend || 0),
+    healthScore: Number(parsed.healthScore || 75),
+    financialPersona: parsed.financialPersona || "The Mindful Spender 🌿",
+    personaDescription: parsed.personaDescription || "A balanced spender with varied monthly investments.",
+    summary: parsed.summary || "Here is the breakdown of your spending across key categories.",
+    funnyObservation: parsed.funnyObservation || "Your local coffee & dining spots are definitely thankful for your business!",
+    actionableTips: Array.isArray(parsed.actionableTips) ? parsed.actionableTips : ["Review recurring subscriptions to cancel unused services."],
+    topCategories: Array.isArray(parsed.topCategories) ? parsed.topCategories : [],
+    largestExpenses: Array.isArray(parsed.largestExpenses) ? parsed.largestExpenses : [],
+    subscriptions: Array.isArray(parsed.subscriptions) ? parsed.subscriptions : [],
+    dailySpending: Array.isArray(parsed.dailySpending) ? parsed.dailySpending : [],
+    allTransactions: sortedTransactions
+  };
+}
+
 async function requestGeminiContent(
   ai: GoogleGenAI,
   model: string,
@@ -311,11 +468,12 @@ async function requestGeminiContent(
         parts: [
           {
             text: `Please read and analyze this bank statement PDF thoroughly across ALL pages.
-CRITICAL:
+CRITICAL EXTRACTION GUIDELINES:
 1. Examine EVERY page from first to last — do NOT stop at page 1.
 2. Extract all transactions up through the final date of the statement into 'allTransactions'.
 3. Correctly parse DD/MM/YYYY dates so late-month transactions (e.g. 13th to 31st of the month) are preserved with accurate YYYY-MM-DD isoDate.
-4. Auto-detect currency (default to ₹ if ambiguous).`
+4. Auto-detect currency (default to ₹ if ambiguous).
+5. Output pure JSON only without markdown fences.`
           },
           { inlineData: { data: base64Data, mimeType } }
         ]
@@ -339,105 +497,97 @@ export async function analyzeStatement(
   const ai = new GoogleGenAI({ apiKey });
   const modelToUse = requestedModel || DEFAULT_MODEL;
 
-  let response: any;
   let activeModel = modelToUse;
   let fallbackAttempted = false;
   let fallbackModelUsed: string | undefined;
 
+  const tryGenerateAndParse = async (model: string): Promise<FinancialInsights> => {
+    const res = await requestGeminiContent(ai, model, base64Data, mimeType);
+    if (!res?.text) {
+      throw new Error(`Empty response received from model ${model}.`);
+    }
+    return parseAndBuildInsights(res.text);
+  };
+
   try {
-    response = await requestGeminiContent(ai, activeModel, base64Data, mimeType);
-  } catch (primaryErr: unknown) {
-    console.warn(`Gemini call failed with model "${activeModel}":`, primaryErr);
+    return await tryGenerateAndParse(activeModel);
+  } catch (primaryErr: any) {
+    console.warn(`Gemini analysis failed with model "${activeModel}":`, primaryErr);
 
     const fallback = getFallbackModel(activeModel);
     const parsedErr = parseGeminiError(primaryErr, activeModel);
 
-    // If error is high calls / rate limit (429) or overloaded (503), attempt fallback
-    if (fallback && (parsedErr.code === "RATE_LIMIT_EXCEEDED" || parsedErr.code === "MODEL_OVERLOADED")) {
+    // Check if error is due to rate limits or unparseable data
+    const isUnparseable =
+      primaryErr?.message?.includes("Model output:") ||
+      primaryErr?.message?.includes("JSON") ||
+      primaryErr?.message?.includes("Unexpected token") ||
+      primaryErr?.message?.includes("SyntaxError");
+
+    const shouldFallback = Boolean(
+      fallback && (
+        parsedErr.code === "RATE_LIMIT_EXCEEDED" ||
+        parsedErr.code === "MODEL_OVERLOADED" ||
+        isUnparseable
+      )
+    );
+
+    if (shouldFallback && fallback) {
       console.info(`Attempting fallback to lower model "${fallback}"...`);
       fallbackAttempted = true;
       fallbackModelUsed = fallback;
       try {
-        response = await requestGeminiContent(ai, fallback, base64Data, mimeType);
+        const fallbackResult = await tryGenerateAndParse(fallback);
         activeModel = fallback;
-      } catch (fallbackErr: unknown) {
+        return fallbackResult;
+      } catch (fallbackErr: any) {
         console.error(`Fallback to "${fallback}" also failed:`, fallbackErr);
-        throw new GeminiAnalysisError(
-          parseGeminiError(fallbackErr, modelToUse, true, fallback)
-        );
+        if (parsedErr.code === "RATE_LIMIT_EXCEEDED" || parsedErr.code === "MODEL_OVERLOADED") {
+          throw new GeminiAnalysisError(
+            parseGeminiError(fallbackErr, modelToUse, true, fallback)
+          );
+        }
       }
-    } else {
-      throw new GeminiAnalysisError(parsedErr);
     }
-  }
 
-  if (!response?.text) {
-    throw new GeminiAnalysisError({
-      code: "UNPARSEABLE_RESPONSE",
-      title: "No Data Received From Gemini",
-      message: `Gemini (${activeModel}) completed the request but returned an empty response.`,
-      suggestion: "Please try uploading the document again, or select a different model in Settings ⚙️.",
-      model: activeModel,
-      fallbackAttempted,
-      fallbackModel: fallbackModelUsed
-    });
-  }
+    const errMsg = primaryErr?.message || "";
+    const isProtectedOrUnreadable =
+      errMsg.toLowerCase().includes("password") ||
+      errMsg.toLowerCase().includes("encrypt") ||
+      errMsg.toLowerCase().includes("protect") ||
+      errMsg.toLowerCase().includes("scanned") ||
+      errMsg.toLowerCase().includes("unreadable");
 
-  try {
-    const parsed = JSON.parse(response.text);
+    if (isProtectedOrUnreadable) {
+      throw new GeminiAnalysisError({
+        code: "UNPARSEABLE_RESPONSE",
+        title: "Statement Unreadable or Password Protected",
+        message: `Gemini (${activeModel}) was unable to read transactions from this PDF. ${errMsg}`,
+        suggestion: "If your bank statement is password-protected, please remove the password or print/export a clean digital PDF without encryption.",
+        model: activeModel,
+        fallbackAttempted,
+        fallbackModel: fallbackModelUsed,
+        technicalDetails: errMsg
+      });
+    }
 
-    const currencySymbol = parsed.currencySymbol || "₹";
-    const currencyCode = parsed.currencyCode || "INR";
+    if (isUnparseable) {
+      throw new GeminiAnalysisError({
+        code: "UNPARSEABLE_RESPONSE",
+        title: "Statement Extraction Error",
+        message: fallbackAttempted
+          ? `Both "${modelToUse}" and backup "${fallbackModelUsed}" were unable to extract structured financial data from this document.`
+          : `Gemini (${activeModel}) analyzed the statement, but the response was not valid financial data.`,
+        suggestion: activeModel === "gemini-3.8-flash"
+          ? "Gemini 3.8 Flash preview often has stricter formatting issues. Please switch to Gemini 2.5 Flash in Settings ⚙️ for guaranteed structured data, or ensure the PDF has readable text."
+          : "Please verify that the PDF is a standard bank statement with clear transaction tables and readable text.",
+        model: activeModel,
+        fallbackAttempted,
+        fallbackModel: fallbackModelUsed,
+        technicalDetails: errMsg
+      });
+    }
 
-    // Clean, normalize and sort transactions newest first using robust parser
-    const rawTransactions: Transaction[] = Array.isArray(parsed.allTransactions) ? parsed.allTransactions : [];
-    const formattedTransactions: Transaction[] = rawTransactions.map((tx) => {
-      const cleanDate = formatDisplayDate(tx.isoDate || tx.date);
-      return {
-        ...tx,
-        date: cleanDate || tx.date,
-        isoDate: tx.isoDate || cleanDate,
-        amount: Math.abs(Number(tx.amount) || 0)
-      };
-    });
-
-    const sortedTransactions = formattedTransactions.sort((a, b) => {
-      return parseDateToTimestamp(b.isoDate || b.date) - parseDateToTimestamp(a.isoDate || a.date);
-    });
-
-    return {
-      currencySymbol,
-      currencyCode,
-      statementPeriod: parsed.statementPeriod || "Current Statement",
-      accountHolder: parsed.accountHolder || "Account Holder",
-      totalSpent: Number(parsed.totalSpent || 0),
-      totalIncome: Number(parsed.totalIncome || 0),
-      netSavings: Number(parsed.netSavings ?? ((parsed.totalIncome || 0) - (parsed.totalSpent || 0))),
-      savingsRate: Number(parsed.savingsRate ?? (parsed.totalIncome > 0 ? Math.round((((parsed.totalIncome - parsed.totalSpent) / parsed.totalIncome) * 100) * 10) / 10 : 0)),
-      averageDailySpend: Number(parsed.averageDailySpend || 0),
-      healthScore: Number(parsed.healthScore || 75),
-      financialPersona: parsed.financialPersona || "The Mindful Spender 🌿",
-      personaDescription: parsed.personaDescription || "A balanced spender with varied monthly investments.",
-      summary: parsed.summary || "Here is the breakdown of your spending across key categories.",
-      funnyObservation: parsed.funnyObservation || "Your local coffee & dining spots are definitely thankful for your business!",
-      actionableTips: Array.isArray(parsed.actionableTips) ? parsed.actionableTips : ["Review recurring subscriptions to cancel unused services."],
-      topCategories: Array.isArray(parsed.topCategories) ? parsed.topCategories : [],
-      largestExpenses: Array.isArray(parsed.largestExpenses) ? parsed.largestExpenses : [],
-      subscriptions: Array.isArray(parsed.subscriptions) ? parsed.subscriptions : [],
-      dailySpending: Array.isArray(parsed.dailySpending) ? parsed.dailySpending : [],
-      allTransactions: sortedTransactions
-    };
-  } catch (_parseError) {
-    console.error("Failed to parse Gemini JSON response:", response.text);
-    throw new GeminiAnalysisError({
-      code: "UNPARSEABLE_RESPONSE",
-      title: "Statement Extraction Error",
-      message: "Gemini analyzed the statement, but the response was not valid financial data.",
-      suggestion: "Please verify that the PDF is a standard bank statement with clear transaction tables and readable text.",
-      model: activeModel,
-      fallbackAttempted,
-      fallbackModel: fallbackModelUsed,
-      technicalDetails: typeof response.text === "string" ? response.text.slice(0, 300) : undefined
-    });
+    throw new GeminiAnalysisError(parseGeminiError(primaryErr, activeModel, fallbackAttempted, fallbackModelUsed));
   }
 }
