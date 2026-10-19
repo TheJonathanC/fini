@@ -2,6 +2,207 @@ import { GoogleGenAI } from "@google/genai";
 import { FinancialInsights, Transaction } from "./types";
 import { parseDateToTimestamp, formatDisplayDate } from "./dateUtils";
 
+export interface GeminiModelOption {
+  id: string;
+  name: string;
+  description: string;
+  badge?: string;
+  badgeColor?: string;
+  isLowerTier?: boolean;
+}
+
+export const AVAILABLE_MODELS: GeminiModelOption[] = [
+  {
+    id: "gemini-2.5-flash",
+    name: "Gemini 2.5 Flash",
+    description: "Recommended — High multimodal accuracy on PDF statements with stable rate limits",
+    badge: "Recommended",
+    badgeColor: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700",
+    isLowerTier: true
+  },
+  {
+    id: "gemini-2.0-flash",
+    name: "Gemini 2.0 Flash",
+    description: "Ultra-fast response times and generous request-per-minute quota",
+    badge: "Fast & High Quota",
+    badgeColor: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 border-blue-300 dark:border-blue-700",
+    isLowerTier: true
+  },
+  {
+    id: "gemini-2.5-flash-lite",
+    name: "Gemini 2.5 Flash Lite",
+    description: "Lightweight resource footprint — ideal during high peak traffic",
+    badge: "Lite",
+    badgeColor: "bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300 border-purple-300 dark:border-purple-700",
+    isLowerTier: true
+  },
+  {
+    id: "gemini-1.5-flash",
+    name: "Gemini 1.5 Flash",
+    description: "Reliable fallback model with mature quota allocation",
+    badge: "Fallback",
+    badgeColor: "bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300 border-slate-300 dark:border-slate-600",
+    isLowerTier: true
+  },
+  {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    description: "High-capability preview model — frequently subject to high call volume & strict rate limits",
+    badge: "High Calls / Peak Traffic",
+    badgeColor: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border-amber-300 dark:border-amber-700",
+    isLowerTier: false
+  }
+];
+
+export const DEFAULT_MODEL = "gemini-2.5-flash";
+
+export type GeminiErrorCode =
+  | "RATE_LIMIT_EXCEEDED"
+  | "MODEL_OVERLOADED"
+  | "INVALID_API_KEY"
+  | "PAYLOAD_TOO_LARGE"
+  | "UNPARSEABLE_RESPONSE"
+  | "SERVICE_ERROR";
+
+export interface DescriptiveGeminiError {
+  code: GeminiErrorCode;
+  title: string;
+  message: string;
+  suggestion: string;
+  model: string;
+  fallbackAttempted?: boolean;
+  fallbackModel?: string;
+  technicalDetails?: string;
+}
+
+export class GeminiAnalysisError extends Error {
+  descriptive: DescriptiveGeminiError;
+
+  constructor(descriptive: DescriptiveGeminiError) {
+    super(descriptive.message);
+    this.name = "GeminiAnalysisError";
+    this.descriptive = descriptive;
+  }
+}
+
+export function parseGeminiError(
+  error: unknown,
+  model: string,
+  fallbackAttempted = false,
+  fallbackModel?: string
+): DescriptiveGeminiError {
+  const errObj = error as { message?: string; status?: number | string; statusCode?: number; code?: number | string };
+  const rawMsg = errObj?.message || (typeof error === "string" ? error : JSON.stringify(error) || "Unknown error");
+  const status = errObj?.status || errObj?.statusCode || errObj?.code;
+  const msgLower = rawMsg.toLowerCase();
+
+  // Check 1: Rate limit / Quota / High calls / Resource exhausted (HTTP 429)
+  const isRateLimit =
+    status === 429 ||
+    status === "RESOURCE_EXHAUSTED" ||
+    msgLower.includes("resource_exhausted") ||
+    msgLower.includes("429") ||
+    msgLower.includes("quota exceeded") ||
+    msgLower.includes("rate limit") ||
+    msgLower.includes("too many requests") ||
+    msgLower.includes("queries per minute") ||
+    msgLower.includes("queries per day") ||
+    msgLower.includes("high calls") ||
+    msgLower.includes("high call volume") ||
+    msgLower.includes("exhausted");
+
+  // Check 2: Model overloaded / Peak capacity / Service Unavailable (HTTP 503)
+  const isOverloaded =
+    status === 503 ||
+    status === "UNAVAILABLE" ||
+    msgLower.includes("overloaded") ||
+    msgLower.includes("model_capacity_exhausted") ||
+    msgLower.includes("unavailable") ||
+    msgLower.includes("high demand") ||
+    msgLower.includes("503");
+
+  // Check 3: Invalid API Key / Auth (HTTP 400 / 401 / 403)
+  const isAuthError =
+    status === 401 ||
+    status === 403 ||
+    msgLower.includes("api_key_invalid") ||
+    msgLower.includes("api key not valid") ||
+    msgLower.includes("permission_denied") ||
+    msgLower.includes("permission denied") ||
+    msgLower.includes("unregistered callers");
+
+  // Check 4: Payload / Token limit
+  const isPayloadTooLarge =
+    status === 413 ||
+    msgLower.includes("payload too large") ||
+    msgLower.includes("request entity too large") ||
+    msgLower.includes("token limit") ||
+    msgLower.includes("exceeds the maximum");
+
+  if (isRateLimit) {
+    return {
+      code: "RATE_LIMIT_EXCEEDED",
+      title: "Rate Limit / High Call Volume Reached",
+      message: fallbackAttempted && fallbackModel
+        ? `Gemini encountered high call traffic on "${model}" and also exhausted quota on fallback "${fallbackModel}". Google's free-tier rate limit (Queries Per Minute) was exceeded.`
+        : `Gemini encountered a high call volume or exceeded your API key's rate limit on "${model}". Google's free-tier enforces limits on requests per minute (RPM) during peak periods.`,
+      suggestion: "Please wait 30 to 60 seconds before retrying. You can also switch to a lower model like Gemini 2.0 Flash or Gemini 2.5 Flash Lite in Settings ⚙️, or check your quota in Google AI Studio.",
+      model,
+      fallbackAttempted,
+      fallbackModel,
+      technicalDetails: rawMsg
+    };
+  }
+
+  if (isOverloaded) {
+    return {
+      code: "MODEL_OVERLOADED",
+      title: "Gemini Model Temporarily Overloaded",
+      message: fallbackAttempted && fallbackModel
+        ? `Google Gemini servers are currently experiencing peak traffic and high demand on "${model}" and fallback model "${fallbackModel}".`
+        : `Google Gemini servers are currently experiencing peak traffic and temporary overload on "${model}".`,
+      suggestion: "Please wait 15–30 seconds and retry. Switching to a lighter model like Gemini 2.0 Flash or Gemini 2.5 Flash Lite in Settings ⚙️ can also bypass congestion.",
+      model,
+      fallbackAttempted,
+      fallbackModel,
+      technicalDetails: rawMsg
+    };
+  }
+
+  if (isAuthError) {
+    return {
+      code: "INVALID_API_KEY",
+      title: "Invalid or Unauthorized API Key",
+      message: "Google Gemini rejected the provided API key. It may be mistyped, expired, or lack access to the Generative Language API.",
+      suggestion: "Open Settings ⚙️ to verify your key or generate a new free API key at Google AI Studio (aistudio.google.com).",
+      model,
+      technicalDetails: rawMsg
+    };
+  }
+
+  if (isPayloadTooLarge) {
+    return {
+      code: "PAYLOAD_TOO_LARGE",
+      title: "Document Exceeds Processing Limits",
+      message: "The bank statement PDF has too many pages or the file payload exceeds the Gemini document limit.",
+      suggestion: "Try uploading an individual statement period or a compressed PDF document.",
+      model,
+      technicalDetails: rawMsg
+    };
+  }
+
+  return {
+    code: "SERVICE_ERROR",
+    title: "Gemini Analysis Failed",
+    message: rawMsg || "An unexpected error occurred while communicating with the Gemini API.",
+    suggestion: "Check your internet connection, verify your API key in Settings, and try uploading your PDF again.",
+    model,
+    fallbackAttempted,
+    fallbackModel,
+    technicalDetails: rawMsg
+  };
+}
+
 const SYSTEM_PROMPT = `You are an elite, thorough, and witty financial analysis assistant for "fini." — a modern financial statement analyzer.
 Your job is to read and understand bank statements provided as PDF documents (or statement extracts).
 
@@ -89,18 +290,24 @@ You MUST return ONLY a valid JSON object matching this structure:
   ]
 }`;
 
-export async function analyzeStatement(
-  base64Data: string,
-  mimeType: string,
-  apiKey: string
-): Promise<FinancialInsights> {
-  const ai = new GoogleGenAI({ apiKey });
+function getFallbackModel(primaryModel: string): string | null {
+  if (primaryModel === "gemini-3.8-flash") return "gemini-2.5-flash";
+  if (primaryModel === "gemini-2.5-flash") return "gemini-2.0-flash";
+  if (primaryModel === "gemini-2.0-flash") return "gemini-1.5-flash";
+  return null;
+}
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.8-flash',
+async function requestGeminiContent(
+  ai: GoogleGenAI,
+  model: string,
+  base64Data: string,
+  mimeType: string
+) {
+  return await ai.models.generateContent({
+    model,
     contents: [
       {
-        role: 'user',
+        role: "user",
         parts: [
           {
             text: `Please read and analyze this bank statement PDF thoroughly across ALL pages.
@@ -121,9 +328,59 @@ CRITICAL:
       maxOutputTokens: 32768,
     }
   });
+}
 
-  if (!response.text) {
-    throw new Error("No response received from Gemini.");
+export async function analyzeStatement(
+  base64Data: string,
+  mimeType: string,
+  apiKey: string,
+  requestedModel: string = DEFAULT_MODEL
+): Promise<FinancialInsights> {
+  const ai = new GoogleGenAI({ apiKey });
+  const modelToUse = requestedModel || DEFAULT_MODEL;
+
+  let response: any;
+  let activeModel = modelToUse;
+  let fallbackAttempted = false;
+  let fallbackModelUsed: string | undefined;
+
+  try {
+    response = await requestGeminiContent(ai, activeModel, base64Data, mimeType);
+  } catch (primaryErr: unknown) {
+    console.warn(`Gemini call failed with model "${activeModel}":`, primaryErr);
+
+    const fallback = getFallbackModel(activeModel);
+    const parsedErr = parseGeminiError(primaryErr, activeModel);
+
+    // If error is high calls / rate limit (429) or overloaded (503), attempt fallback
+    if (fallback && (parsedErr.code === "RATE_LIMIT_EXCEEDED" || parsedErr.code === "MODEL_OVERLOADED")) {
+      console.info(`Attempting fallback to lower model "${fallback}"...`);
+      fallbackAttempted = true;
+      fallbackModelUsed = fallback;
+      try {
+        response = await requestGeminiContent(ai, fallback, base64Data, mimeType);
+        activeModel = fallback;
+      } catch (fallbackErr: unknown) {
+        console.error(`Fallback to "${fallback}" also failed:`, fallbackErr);
+        throw new GeminiAnalysisError(
+          parseGeminiError(fallbackErr, modelToUse, true, fallback)
+        );
+      }
+    } else {
+      throw new GeminiAnalysisError(parsedErr);
+    }
+  }
+
+  if (!response?.text) {
+    throw new GeminiAnalysisError({
+      code: "UNPARSEABLE_RESPONSE",
+      title: "No Data Received From Gemini",
+      message: `Gemini (${activeModel}) completed the request but returned an empty response.`,
+      suggestion: "Please try uploading the document again, or select a different model in Settings ⚙️.",
+      model: activeModel,
+      fallbackAttempted,
+      fallbackModel: fallbackModelUsed
+    });
   }
 
   try {
@@ -170,8 +427,17 @@ CRITICAL:
       dailySpending: Array.isArray(parsed.dailySpending) ? parsed.dailySpending : [],
       allTransactions: sortedTransactions
     };
-  } catch (error) {
-    console.error("Failed to parse Gemini response:", response.text);
-    throw new Error("Unable to parse the financial statement data. Please ensure the document is a readable bank statement.");
+  } catch (_parseError) {
+    console.error("Failed to parse Gemini JSON response:", response.text);
+    throw new GeminiAnalysisError({
+      code: "UNPARSEABLE_RESPONSE",
+      title: "Statement Extraction Error",
+      message: "Gemini analyzed the statement, but the response was not valid financial data.",
+      suggestion: "Please verify that the PDF is a standard bank statement with clear transaction tables and readable text.",
+      model: activeModel,
+      fallbackAttempted,
+      fallbackModel: fallbackModelUsed,
+      technicalDetails: typeof response.text === "string" ? response.text.slice(0, 300) : undefined
+    });
   }
 }

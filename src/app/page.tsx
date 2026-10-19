@@ -30,7 +30,13 @@ import {
   Check,
   Coins
 } from "lucide-react";
-import { analyzeStatement } from "@/lib/gemini";
+import {
+  analyzeStatement,
+  AVAILABLE_MODELS,
+  DEFAULT_MODEL,
+  DescriptiveGeminiError,
+  GeminiAnalysisError
+} from "@/lib/gemini";
 import { FinancialInsights, Transaction } from "@/lib/types";
 import { SAMPLE_INSIGHTS } from "@/lib/mockData";
 import { parseDateToTimestamp, formatDisplayDate } from "@/lib/dateUtils";
@@ -74,13 +80,16 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [tempKey, setTempKey] = useState<string>("");
   const [currencySymbol, setCurrencySymbol] = useState<string>("₹");
+  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
+  const [lastUploadedFile, setLastUploadedFile] = useState<File | null>(null);
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState<boolean>(false);
 
   // App State
   const [isDemoActive, setIsDemoActive] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [analysisStep, setAnalysisStep] = useState<string>("Reading PDF statement...");
   const [insights, setInsights] = useState<FinancialInsights | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<DescriptiveGeminiError | string | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "categories" | "daily" | "subscriptions" | "transactions">("overview");
 
   // Transaction Search, Filter & Sort state
@@ -114,6 +123,10 @@ export default function Home() {
 
   const currentCurrency = CURRENCY_LIST.find((c) => c.symbol === currencySymbol) || CURRENCY_LIST[0];
 
+  const currentModel = useMemo(() => {
+    return AVAILABLE_MODELS.find((m) => m.id === selectedModel) || AVAILABLE_MODELS[0];
+  }, [selectedModel]);
+
   // Initialize theme, api key, and previous data
   useEffect(() => {
     // Theme initialization
@@ -131,6 +144,12 @@ export default function Home() {
     const storedCurrency = localStorage.getItem("fini_currency");
     if (storedCurrency) {
       setCurrencySymbol(storedCurrency);
+    }
+
+    // Stored model preference
+    const storedModel = localStorage.getItem("fini_gemini_model");
+    if (storedModel) {
+      setSelectedModel(storedModel);
     }
 
     // API Key
@@ -172,6 +191,11 @@ export default function Home() {
     localStorage.setItem("fini_currency", newSymbol);
   };
 
+  const handleModelChange = (newModel: string) => {
+    setSelectedModel(newModel);
+    localStorage.setItem("fini_gemini_model", newModel);
+  };
+
   const handleSaveApiKey = () => {
     const trimmed = tempKey.trim();
     localStorage.setItem("fini_gemini_api_key", trimmed);
@@ -206,6 +230,7 @@ export default function Home() {
       return;
     }
 
+    setLastUploadedFile(file);
     setError(null);
     setIsAnalyzing(true);
     setAnalysisStep("Reading bank statement document...");
@@ -230,7 +255,7 @@ export default function Home() {
         reader.readAsDataURL(file);
       });
 
-      const result = await analyzeStatement(base64Data, file.type, apiKey);
+      const result = await analyzeStatement(base64Data, file.type, apiKey, selectedModel);
       setIsDemoActive(false);
       setInsights(result);
       if (result.currencySymbol) {
@@ -239,9 +264,18 @@ export default function Home() {
       }
       localStorage.setItem("fini_insights", JSON.stringify(result));
       setCurrentPage(1);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || "Failed to analyze the statement. Please verify your API key and file.");
+    } catch (err: unknown) {
+      console.error("Statement analysis failed:", err);
+      if (err instanceof GeminiAnalysisError) {
+        setError(err.descriptive);
+      } else if ((err as { descriptive?: DescriptiveGeminiError })?.descriptive) {
+        setError((err as { descriptive: DescriptiveGeminiError }).descriptive);
+      } else {
+        setError(
+          (err as { message?: string })?.message ||
+          "Failed to analyze the statement. Please verify your API key and file."
+        );
+      }
     } finally {
       clearTimeout(stepTimer1);
       clearTimeout(stepTimer2);
@@ -489,17 +523,138 @@ export default function Home() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8">
         {/* Error Alert */}
         {error && (
-          <div className="mb-6 p-4 bg-[#FFE4E6] dark:bg-rose-950/70 border-2 border-slate-900 dark:border-rose-800 rounded-2xl shadow-[3px_3px_0px_0px_#0f172a] dark:shadow-[3px_3px_0px_0px_#020617] flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <AlertCircle className="text-rose-600 dark:text-rose-400 shrink-0" size={24} />
-              <p className="font-bold text-rose-950 dark:text-rose-200 text-sm sm:text-base">{error}</p>
-            </div>
-            <button
-              onClick={() => setError(null)}
-              className="p-1 hover:bg-rose-200 dark:hover:bg-rose-900 rounded-lg text-rose-800 dark:text-rose-300 transition-colors"
-            >
-              <X size={18} />
-            </button>
+          <div className="mb-6 p-4 sm:p-5 bg-[#FFE4E6] dark:bg-rose-950/80 border-2 border-slate-900 dark:border-rose-800 rounded-2xl shadow-[3px_3px_0px_0px_#0f172a] dark:shadow-[3px_3px_0px_0px_#020617] animate-in fade-in duration-200">
+            {typeof error === "string" ? (
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <AlertCircle className="text-rose-600 dark:text-rose-400 shrink-0" size={24} />
+                  <p className="font-bold text-rose-950 dark:text-rose-200 text-sm sm:text-base">{error}</p>
+                </div>
+                <button
+                  onClick={() => setError(null)}
+                  className="p-1 hover:bg-rose-200 dark:hover:bg-rose-900 rounded-lg text-rose-800 dark:text-rose-300 transition-colors shrink-0"
+                  aria-label="Dismiss error"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3 sm:space-y-4">
+                {/* Header row */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-rose-200 dark:bg-rose-900 border-2 border-slate-900 dark:border-rose-700 flex items-center justify-center shrink-0 text-xl shadow-[2px_2px_0px_0px_#0f172a]">
+                      {error.code === "RATE_LIMIT_EXCEEDED" ? "⚡" : error.code === "MODEL_OVERLOADED" ? "⏳" : error.code === "INVALID_API_KEY" ? "🔑" : "⚠️"}
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <h4 className="font-black text-slate-950 dark:text-rose-100 text-sm sm:text-base">
+                          {error.title}
+                        </h4>
+                        <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-rose-200/90 dark:bg-rose-900 text-rose-900 dark:text-rose-200 border border-rose-300 dark:border-rose-700">
+                          {error.code === "RATE_LIMIT_EXCEEDED" ? "HTTP 429 · High Traffic" : error.code}
+                        </span>
+                        {error.model && (
+                          <span className="text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-md bg-white/80 dark:bg-black/30 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700">
+                            Model: {error.model}
+                          </span>
+                        )}
+                      </div>
+                      <p className="font-bold text-rose-950 dark:text-rose-100 text-xs sm:text-sm leading-relaxed">
+                        {error.message}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setError(null)}
+                    className="p-1 hover:bg-rose-200 dark:hover:bg-rose-900 rounded-lg text-rose-800 dark:text-rose-300 transition-colors shrink-0"
+                    aria-label="Dismiss error"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {/* Suggestion Box */}
+                {error.suggestion && (
+                  <div className="p-3 sm:p-3.5 rounded-xl bg-white/90 dark:bg-[#131B2E] border-2 border-slate-900 dark:border-slate-700 shadow-[2px_2px_0px_0px_#0f172a] text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 flex items-start gap-2.5">
+                    <span className="text-base select-none shrink-0">💡</span>
+                    <div>
+                      <span className="font-black text-slate-900 dark:text-white uppercase tracking-wider text-[10px] sm:text-[11px] block mb-0.5">
+                        Recommended Fix:
+                      </span>
+                      <span>{error.suggestion}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    onClick={() => setShowSettings(true)}
+                    className="tactile-btn px-3 py-1.5 bg-[#FEF08A] hover:bg-[#FDE047] text-slate-950 text-xs font-black inline-flex items-center gap-1.5"
+                  >
+                    <Settings size={13} />
+                    <span>Change Model in Settings</span>
+                  </button>
+
+                  {error.code === "RATE_LIMIT_EXCEEDED" && selectedModel !== "gemini-2.0-flash" && (
+                    <button
+                      onClick={() => {
+                        handleModelChange("gemini-2.0-flash");
+                        if (lastUploadedFile) {
+                          handleProcessFile(lastUploadedFile);
+                        } else {
+                          setError(null);
+                        }
+                      }}
+                      className="tactile-btn px-3 py-1.5 bg-blue-100 dark:bg-blue-950 hover:bg-blue-200 dark:hover:bg-blue-900 text-blue-950 dark:text-blue-200 text-xs font-black inline-flex items-center gap-1.5"
+                    >
+                      <Zap size={13} />
+                      <span>Switch to Gemini 2.0 Flash {lastUploadedFile ? "& Retry" : ""}</span>
+                    </button>
+                  )}
+
+                  {lastUploadedFile && (
+                    <button
+                      onClick={() => handleProcessFile(lastUploadedFile)}
+                      className="tactile-btn px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-black inline-flex items-center gap-1.5"
+                    >
+                      <RefreshCw size={13} />
+                      <span>Retry Upload</span>
+                    </button>
+                  )}
+
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs font-black text-blue-700 dark:text-blue-400 hover:underline inline-flex items-center gap-1 sm:ml-auto"
+                  >
+                    <span>Google AI Studio Quota</span>
+                    <ExternalLink size={12} />
+                  </a>
+                </div>
+
+                {/* Technical details toggle */}
+                {error.technicalDetails && (
+                  <div className="pt-2 border-t border-rose-200 dark:border-rose-900/60">
+                    <button
+                      type="button"
+                      onClick={() => setShowTechnicalDetails(!showTechnicalDetails)}
+                      className="text-[11px] font-bold text-rose-800 dark:text-rose-300 hover:underline inline-flex items-center gap-1"
+                    >
+                      <span>{showTechnicalDetails ? "Hide" : "Show"} Technical Raw Details</span>
+                      <ChevronDown size={12} className={`transition-transform duration-200 ${showTechnicalDetails ? "rotate-180" : ""}`} />
+                    </button>
+                    {showTechnicalDetails && (
+                      <pre className="mt-2 p-3 bg-slate-900 text-emerald-400 dark:bg-black text-[11px] font-mono rounded-xl overflow-x-auto max-h-36 whitespace-pre-wrap border border-slate-700">
+                        {error.technicalDetails}
+                      </pre>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -599,7 +754,7 @@ export default function Home() {
                   ⚡
                 </div>
                 <div>
-                  <h4 className="font-black text-sm text-slate-900 dark:text-white">Gemini 3.8 Flash</h4>
+                  <h4 className="font-black text-sm text-slate-900 dark:text-white">{currentModel.name}</h4>
                   <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Auto-detects Rupee/Currency</p>
                 </div>
               </div>
@@ -1487,7 +1642,7 @@ export default function Home() {
       {/* ============================================================ */}
       {showSettings && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 dark:bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="tactile-card w-full max-w-lg p-6 sm:p-8 bg-white dark:bg-[#131B2E] relative animate-in fade-in zoom-in-95 duration-200">
+          <div className="tactile-card w-full max-w-lg max-h-[92vh] overflow-y-auto p-6 sm:p-8 bg-white dark:bg-[#131B2E] relative animate-in fade-in zoom-in-95 duration-200">
             {/* Close Button */}
             <button
               onClick={() => setShowSettings(false)}
@@ -1504,8 +1659,64 @@ export default function Home() {
             </div>
 
             <p className="text-xs sm:text-sm font-bold text-slate-500 dark:text-slate-400 mb-6">
-              Connect your Google Gemini API key to read and analyze real bank statement PDFs.
+              Connect your Google Gemini API key and choose your preferred AI model to read and analyze real bank statement PDFs.
             </p>
+
+            {/* Gemini Model Preference in Settings */}
+            <div className="mb-5">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                  Gemini Model
+                </label>
+                <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                  Lower models avoid peak rate limits
+                </span>
+              </div>
+              <div className="space-y-2">
+                {AVAILABLE_MODELS.map((m) => {
+                  const isSelected = selectedModel === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => handleModelChange(m.id)}
+                      className={`w-full p-2.5 sm:p-3 rounded-xl border-2 font-black text-left transition-all flex items-start justify-between gap-3 ${
+                        isSelected
+                          ? "border-slate-900 dark:border-amber-400 bg-[#FEF08A] dark:bg-amber-400 text-slate-950 shadow-[2px_2px_0px_0px_#0f172a]"
+                          : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#1E293B] text-slate-700 dark:text-slate-300 hover:border-slate-400"
+                      }`}
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className={`text-xs sm:text-sm font-black ${isSelected ? "text-slate-950" : "text-slate-900 dark:text-white"}`}>
+                            {m.name}
+                          </span>
+                          {m.badge && (
+                            <span
+                              className={`text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-md border ${
+                                isSelected
+                                  ? "bg-slate-900 text-white border-slate-900"
+                                  : m.badgeColor || "bg-slate-200 text-slate-800 border-slate-300"
+                              }`}
+                            >
+                              {m.badge}
+                            </span>
+                          )}
+                        </div>
+                        <p className={`text-[11px] sm:text-xs font-bold leading-snug ${isSelected ? "text-slate-800" : "text-slate-500 dark:text-slate-400"}`}>
+                          {m.description}
+                        </p>
+                      </div>
+                      <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5 ${
+                        isSelected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 dark:border-slate-600"
+                      }`}>
+                        {isSelected && <Check size={10} strokeWidth={3} />}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             {/* Currency Preference in Settings */}
             <div className="mb-5">
